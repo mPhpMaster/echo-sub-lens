@@ -448,7 +448,9 @@ class AppTest(unittest.TestCase):
                                    base_cfg={"target_lang": "ar", "translator": "google"})
             texts = [a.text() for a in lens.menu.actions()]
             self.assertTrue(any(t.startswith("Translating") for t in texts))
-            self.assertTrue(any(t.startswith("Choose an area") for t in texts))
+            self.assertIn("What to translate", texts)
+            what = next(a.menu() for a in lens.menu.actions() if a.text() == "What to translate")
+            self.assertTrue(any(a.text().startswith("An area of the screen") for a in what.actions()))
             self.assertEqual(lens.target, "ar")
             self.assertEqual(lens.translator().key, "google")
             screen, rect = lens.area()

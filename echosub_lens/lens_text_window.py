@@ -7,12 +7,16 @@ in screenshots like any window; Lens leaves the part of the screen under it alon
 own text back.
 """
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QFont, QGuiApplication
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
+                               QPlainTextEdit, QPushButton, QSizeGrip, QSlider, QVBoxLayout, QWidget)
 
 from . import languages
 
 MIN_FONT_PT, MAX_FONT_PT = 8, 40
+MIN_OPACITY = 0                  # % of the background left when it is transparent (0: only the words)
+DIRECTIONS = (("auto", "Direction: automatic"), ("rtl", "Right to left"), ("ltr", "Left to right"))
+GLASS = "#141414"                # the colour of a transparent window's background
 
 
 def reading_order(blocks):
@@ -42,7 +46,11 @@ class TextWindow(QWidget):
         self.setWindowTitle("Translation — EchoSub Lens")
         settings = settings or {}
         self.font_pt = int(settings.get("font_pt", 14))
+        self.direction = settings.get("direction", "auto")
+        if self.direction not in dict(DIRECTIONS):
+            self.direction = "auto"
         self._blocks, self._target = [], None
+        self._glass = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -50,6 +58,35 @@ class TextWindow(QWidget):
         self.box.setReadOnly(True)
         self.box.setPlaceholderText("The translated text of the screen appears here.")
         layout.addWidget(self.box, 1)
+
+        # Transparency and direction
+        look = QHBoxLayout()
+        self.transparent = QCheckBox("Transparent")
+        self.transparent.setToolTip("See the screen through the window; the words stay clear. "
+                                    "Drag an empty spot to move it, the corner to resize it.")
+        self.transparent.setChecked(bool(settings.get("transparent", False)))
+        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity.setRange(MIN_OPACITY, 100)
+        self.opacity.setValue(int(settings.get("opacity", 40)))
+        self.opacity.setFixedWidth(140)
+        self.opacity.setToolTip("How much of the background is left: 0 % shows only the words")
+        self.opacity_label = QLabel()
+        self.opacity_label.setMinimumWidth(110)
+        self.direction_box = QComboBox()
+        for value, text in DIRECTIONS:
+            self.direction_box.addItem(text, value)
+        self.direction_box.setCurrentIndex(self.direction_box.findData(self.direction))
+        self.direction_box.setToolTip("Automatic: right to left for Arabic, Hebrew, Persian and Urdu")
+        self.close_button = QPushButton("✕")
+        self.close_button.setFixedWidth(36)
+        self.close_button.setToolTip("Close the translation window")
+        self.close_button.clicked.connect(self.close)
+        for widget in (self.transparent, self.opacity, self.opacity_label):
+            look.addWidget(widget)
+        look.addStretch(1)
+        look.addWidget(self.direction_box)
+        look.addWidget(self.close_button)
+        layout.addLayout(look)
 
         bar = QHBoxLayout()
         self.with_original = QCheckBox("Original text too")
@@ -71,6 +108,8 @@ class TextWindow(QWidget):
         bar.addStretch(1)
         for widget in (smaller, bigger, copy):
             bar.addWidget(widget)
+        self.grip = QSizeGrip(self)
+        bar.addWidget(self.grip, 0, Qt.AlignBottom | Qt.AlignRight)
         layout.addLayout(bar)
 
         self.set_font_pt(self.font_pt, save=False)
@@ -80,17 +119,85 @@ class TextWindow(QWidget):
         else:
             screen = QGuiApplication.primaryScreen().availableGeometry()
             self.setGeometry(screen.right() - 600, screen.top() + 80, 560, 380)
+        self.transparent.toggled.connect(lambda _: (self._apply_look(), self._changed()))
+        self.opacity.valueChanged.connect(lambda _: (self._apply_look(), self._changed()))
+        self.direction_box.activated.connect(lambda _: self.set_direction(self.direction_box.currentData()))
+        self._apply_look()
+
+    # ---- transparency ----------------------------------------------------------
+    def _apply_look(self):
+        """A see-through window has no title bar: its own background, as transparent as chosen, and words that
+        stay readable over anything (a shadow around them)."""
+        glass = self.transparent.isChecked()
+        self.opacity.setEnabled(glass)
+        self.opacity_label.setText(f"Background {self.opacity.value()} %" if glass else "")
+        self.close_button.setVisible(glass)
+        self.grip.setVisible(glass)
+        if glass != self._glass:
+            self._glass = glass
+            visible, geometry = self.isVisible(), self.geometry()
+            flags = Qt.Window | Qt.WindowStaysOnTopHint
+            if glass:
+                flags |= Qt.FramelessWindowHint
+            self.setAttribute(Qt.WA_TranslucentBackground, glass)
+            self.setWindowFlags(flags)
+            self.setGeometry(geometry)
+            if visible:
+                self.show()
+        if glass:
+            self.box.setStyleSheet("QPlainTextEdit { background: transparent; border: none; color: white; }")
+            self.setStyleSheet("QCheckBox, QLabel { color: white; }")
+            shadow = QGraphicsDropShadowEffect(self.box)
+            shadow.setBlurRadius(6)
+            shadow.setOffset(1, 1)
+            shadow.setColor(QColor(0, 0, 0, 255))
+            self.box.setGraphicsEffect(shadow)
+        else:
+            self.box.setStyleSheet("")
+            self.setStyleSheet("")
+            self.box.setGraphicsEffect(None)
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._glass:
+            return super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        color = QColor(GLASS)
+        color.setAlpha(max(1, round(255 * self.opacity.value() / 100)))  # never 0: it would let clicks through
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawRoundedRect(self.rect(), 10, 10)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if self._glass and event.button() == Qt.LeftButton and self.windowHandle() is not None:
+            self.windowHandle().startSystemMove()  # no title bar: an empty spot moves the window
+            return
+        super().mousePressEvent(event)
+
+    # ---- direction -------------------------------------------------------------
+    def set_direction(self, direction):
+        self.direction = direction if direction in dict(DIRECTIONS) else "auto"
+        self.direction_box.setCurrentIndex(self.direction_box.findData(self.direction))
+        self._fill(force=True)
+        self._changed()
+
+    def right_to_left(self):
+        if self.direction == "auto":
+            return self._target in languages.RTL
+        return self.direction == "rtl"
 
     # ---- content ---------------------------------------------------------------
     def show_blocks(self, blocks, target):
         self._blocks, self._target = list(blocks), target
         self._fill()
 
-    def _fill(self):
+    def _fill(self, force=False):
         text = window_text(self._blocks, self.with_original.isChecked())
-        if text == self.box.toPlainText():
+        if text == self.box.toPlainText() and not force:
             return  # the same text: keep the reader's place and selection
-        rtl = self._target in languages.RTL
+        rtl = self.right_to_left()
         self.box.setLayoutDirection(Qt.RightToLeft if rtl else Qt.LeftToRight)
         option = self.box.document().defaultTextOption()
         option.setTextDirection(Qt.RightToLeft if rtl else Qt.LeftToRight)
@@ -108,7 +215,9 @@ class TextWindow(QWidget):
     def settings(self):
         g = self.geometry()
         return {"geometry": [g.x(), g.y(), g.width(), g.height()], "font_pt": self.font_pt,
-                "with_original": self.with_original.isChecked(), "overlay": not self.only_here.isChecked()}
+                "with_original": self.with_original.isChecked(), "overlay": not self.only_here.isChecked(),
+                "transparent": self.transparent.isChecked(), "opacity": self.opacity.value(),
+                "direction": self.direction}
 
     def _changed(self):
         self.changed.emit(self.settings())

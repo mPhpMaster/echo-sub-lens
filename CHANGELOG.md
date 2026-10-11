@@ -3,6 +3,17 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-10-12
+
+### Added
+- **Translate a window.** Choose a program's window — a video player, a game, a chat — in the Lens window or the right-click menu, and only its text is translated, wherever you move it and whatever its size. While it is minimized, closed or behind another program's window, the translations step aside and Lens waits. Lens finds it again by its title and program the next time it starts.
+- **A transparent translation window**, with how much of its background is left (0–100 %): no title bar then, the words stay solid with a shadow, an empty spot moves it and the corner resizes it.
+- **Text direction**: automatic (from the language), right to left or left to right — in the translation window, and for the translations over the screen (*Appearance → Text direction*).
+- **Reset this page** on every page of the Lens window (Translate, Languages, Translator, Appearance, Keyboard shortcuts) puts its settings back to the defaults, after asking.
+
+### Changed
+- **The right-click menu is in groups**: open and start; *What to translate* (an area, a whole screen, a window, the lens around the mouse) and a file; the languages and the translator; the translation window, copying, and *Translations on the screen* (appearance, screenshots, select mode, looking underneath); settings, about and support; exit.
+
 ## [1.2.0] — 2026-10-12
 
 ### Added

@@ -198,7 +198,8 @@ class LensOverlay(QWidget):
             return  # the same translations in the same places: drawing them again would only flicker
         self._remove_labels()
         self._blocks, self._target = list(blocks), target
-        rtl = target in languages.RTL
+        direction = self.style.get("direction", "auto")
+        rtl = target in languages.RTL if direction not in ("rtl", "ltr") else direction == "rtl"
         self.labels = [self._place(block, rtl) for block in self._blocks if block.translation]
 
     def _same(self, blocks):

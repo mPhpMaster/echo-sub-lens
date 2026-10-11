@@ -9,12 +9,13 @@ import os
 from PySide6.QtCore import QRect, QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel,
-                               QListWidget, QPushButton, QRadioButton, QScrollArea, QStackedWidget,
+                               QListWidget, QMessageBox, QPushButton, QRadioButton, QScrollArea, QStackedWidget,
                                QVBoxLayout, QWidget)
 
 from . import APP_NAME, __version__, config, languages, lens_follow, lens_ocr, lens_translate
 from .lens_about import ACCENT, AboutPage
 from .lens_menu import LANGUAGE_SETTINGS, PEEK_CHOICES, screen_label
+from . import lens_shortcuts
 from .lens_shortcuts import ShortcutsPage
 from .lens_style import AppearancePage
 
@@ -192,6 +193,30 @@ class LensWindow(QWidget):
         layout.addWidget(label)
         return label
 
+    def _reset_button(self, layout, page):
+        button = QPushButton("Reset this page")
+        button.setToolTip("Put the settings on this page back to the defaults")
+        button.setCursor(Qt.PointingHandCursor)
+        button.clicked.connect(lambda: self.reset_page(page))
+        layout.addSpacing(16)
+        layout.addWidget(self._row(button))
+        return button
+
+    def reset_page(self, page, ask=True):
+        title = self.lens.RESET_TITLES.get(page, page)
+        if ask and QMessageBox.question(self, "Reset", f"Put the {title} settings back to the defaults?",
+                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        taken = self.lens.reset(page)
+        if page == "appearance":
+            self.appearance.load(self.lens.overlay.style)
+        elif page == "shortcuts":
+            self.shortcuts.load(lens_shortcuts.defaults())
+            if taken:
+                self.shortcuts.show_unavailable(taken)
+            self._keys_edited()
+        self.refresh()
+
     @staticmethod
     def _row(*widgets):
         """Widgets side by side, as one line of the page."""
@@ -260,7 +285,19 @@ class LensWindow(QWidget):
         layout.addWidget(self._row(self.mode_mouse, self.lens_box, self.frame_box))
         self._help(layout, "Only the text near the pointer, in a small box that follows the mouse. Stop on a line "
                            "and its translation appears.")
-        for i, button in enumerate((self.mode_screen, self.mode_area, self.mode_mouse)):
+        self.mode_window = QRadioButton("A window")
+        self.window_box = QComboBox()
+        self.window_box.setMinimumWidth(320)
+        self.window_box.setMaxVisibleItems(20)
+        self.window_box.activated.connect(lambda _: self._window_chosen())
+        self.windows_button = QPushButton("↻")
+        self.windows_button.setToolTip("Read the list of open windows again")
+        self.windows_button.setFixedWidth(40)
+        self.windows_button.clicked.connect(self._fill_windows)
+        layout.addWidget(self._row(self.mode_window, self.window_box, self.windows_button))
+        self._help(layout, "Only the text of one program's window — wherever you move it, whatever its size. While "
+                           "it is minimized or behind another window, nothing is translated.")
+        for i, button in enumerate((self.mode_screen, self.mode_area, self.mode_mouse, self.mode_window)):
             self.modes.addButton(button, i)
         self.modes.idClicked.connect(self._mode_chosen)
 
@@ -298,6 +335,7 @@ class LensWindow(QWidget):
         layout.addWidget(self._row(self.file_button))
         self._help(layout, "A picture, a PDF, a Word document or a text or subtitle file, in a window of its own. "
                            "The original is never changed.")
+        self._reset_button(layout, "translate")
         layout.addStretch(1)
 
     def _languages_page(self):
@@ -329,6 +367,7 @@ class LensWindow(QWidget):
         layout.addWidget(add)
         self._help(layout, "Opens Windows Settings → Time & language → Language: add the language with its "
                            "Optical character recognition feature, then open this window again.")
+        self._reset_button(layout, "languages")
         layout.addStretch(1)
 
     def _fill_ocr_languages(self):
@@ -359,6 +398,7 @@ class LensWindow(QWidget):
         self.device_label.setObjectName("muted")
         self.device_label.setWordWrap(True)
         layout.addWidget(self.device_label)
+        self._reset_button(layout, "translator")
         layout.addStretch(1)
 
     def _appearance_page(self):
@@ -366,6 +406,7 @@ class LensWindow(QWidget):
         self.appearance = AppearancePage(self.lens.overlay.style)
         self.appearance.changed.connect(self.lens.apply_style)
         layout.addWidget(self.appearance)
+        self._reset_button(layout, "appearance")
         layout.addStretch(1)
 
     def _shortcuts_page(self):
@@ -380,7 +421,10 @@ class LensWindow(QWidget):
         self.save_keys.clicked.connect(self.apply_keys)
         self.undo_keys = QPushButton("Undo my changes")
         self.undo_keys.clicked.connect(lambda: self.shortcuts.load(self.lens.keys))
-        line = self._row(self.save_keys, self.undo_keys, self.keys_note)
+        self.reset_keys = QPushButton("Reset this page")
+        self.reset_keys.setToolTip("The default keys")
+        self.reset_keys.clicked.connect(lambda: self.reset_page("shortcuts"))
+        line = self._row(self.save_keys, self.undo_keys, self.reset_keys, self.keys_note)
         layout.addWidget(line)
         self.shortcuts.changed.connect(self._keys_edited)
         self._keys_edited()
@@ -405,8 +449,35 @@ class LensWindow(QWidget):
             self._changed(self.lens.use_screen, self.screen_box.currentData())
         elif index == 1:
             self._changed(self.lens.use_area)
-        else:
+        elif index == 2:
             self._changed(self.lens.use_mouse_mode, True)
+        else:
+            self._window_chosen()
+
+    def _fill_windows(self):
+        from . import app_windows
+
+        before = self._syncing
+        self._syncing = True
+        self.window_box.clear()
+        for window in app_windows.list_windows():
+            self.window_box.addItem(window.label, window)
+        cfg = self.lens.cfg
+        for i in range(self.window_box.count()):
+            w = self.window_box.itemData(i)
+            if w.title == cfg["window_title"] and w.program == cfg["window_program"]:
+                self.window_box.setCurrentIndex(i)
+                break
+        if not self.window_box.count():
+            self.window_box.addItem("No other window is open", None)
+        self._syncing = before
+
+    def _window_chosen(self):
+        window = self.window_box.currentData()
+        if window is None:
+            self.refresh()
+            return
+        self._changed(self.lens.use_window, window)
 
     def _only_window(self, on):
         window = self.lens.text_window
@@ -447,6 +518,7 @@ class LensWindow(QWidget):
             current = self.ocr_box.currentData()
             self._syncing = True
             self._fill_ocr_languages()  # a language may have been added in Windows meanwhile
+            self._fill_windows()  # windows opened and closed meanwhile
             self.ocr_box.setCurrentIndex(max(0, self.ocr_box.findData(current)))
             self._syncing = False
             if not self.undo_keys.isEnabled():
@@ -466,7 +538,8 @@ class LensWindow(QWidget):
         self._syncing = True
         try:
             mode = cfg["mode"]
-            {"screen": self.mode_screen, "area": self.mode_area, "mouse": self.mode_mouse}.get(
+            {"screen": self.mode_screen, "area": self.mode_area, "mouse": self.mode_mouse,
+             "window": self.mode_window}.get(
                 mode, self.mode_screen).setChecked(True)
             self._fill_screens()
             size = list(cfg["lens_size"])

@@ -9,7 +9,8 @@ from PySide6.QtCore import QRect, QTimer
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QSystemTrayIcon
 
-from . import config, downloads, hotkeys, languages, lens_files, lens_follow, lens_shortcuts, lens_translate, translate
+from . import (app_windows, config, downloads, hotkeys, languages, lens_files, lens_follow, lens_shortcuts,
+               lens_translate, translate)
 from .lens_busy import Activity, BusyIndicator
 from .lens_app import LENS_NAME, ctrl_held
 from .lens_menu import LensMenuMixin
@@ -50,6 +51,8 @@ class LensApp(LensMenuMixin):
         self.keys = lens_shortcuts.merged(cfg.get("shortcuts"))
         self.picker = None
         self._mouse_area = None      # (QScreen, QRect) of the lens around the mouse
+        self._window = None          # app_windows.AppWindow translated in mode "window"
+        self._window_spot = None     # where it was last seen; None: minimized, gone or behind another window
         self._anchor = None          # where the pointer was when the lens was last placed
         self.file_windows = []
         self.text_window = None
@@ -63,7 +66,7 @@ class LensApp(LensMenuMixin):
         self.scanner = LensScanner(cfg["interval_ms"])
         self.scanner.covered = self.overlay.covered
         self.scanner.peeking = self.overlay.set_peeking
-        self.scanner.paused = lambda: ctrl_held() or self.overlay.engaged()
+        self.scanner.paused = lambda: ctrl_held() or self.overlay.engaged() or self._window_away()
         self.scanner.blocked = self._under_own_windows
         self.scanner.peek_every = cfg["peek_seconds"]
         self.scanner.result.connect(self._show)
@@ -273,6 +276,12 @@ class LensApp(LensMenuMixin):
         """(QScreen, QRect relative to it) of what is translated now."""
         if self.cfg["mode"] == "mouse":
             return self._mouse_area or self._lens_at(QCursor.pos())
+        if self.cfg["mode"] == "window":
+            spot = self._find_window_spot()
+            if spot is not None:
+                return spot
+            primary = QGuiApplication.primaryScreen()
+            return primary, QRect(0, 0, 1, 1)  # nothing to translate until the window shows again
         screens = QGuiApplication.screens()
         screen = next((s for s in screens if s.name() == self.cfg["screen"]), QGuiApplication.primaryScreen())
         whole = QRect(0, 0, screen.geometry().width(), screen.geometry().height())
@@ -314,6 +323,48 @@ class LensApp(LensMenuMixin):
         self._sync_mouse_item()
         self.start()
         self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
+
+    # ---- one window ----------------------------------------------------------------
+    def use_window(self, window):
+        """Translate only `window` (an app_windows.AppWindow), wherever it goes."""
+        self._window = window
+        self._window_spot = None
+        self._set(mode="window", window_title=window.title, window_program=window.program)
+        self._fill_screens()
+        self._sync_mouse_item()
+        self.start()
+        self._notify(f"Translating {self._where()}")
+
+    def _chosen_window(self):
+        """The window chosen, found again by its title and program after Lens started or it was opened again."""
+        if self._window is not None and app_windows.alive(self._window.hwnd):
+            return self._window
+        self._window = app_windows.find(self.cfg["window_title"], self.cfg["window_program"])
+        return self._window
+
+    def _find_window_spot(self):
+        window = self._chosen_window()
+        return app_windows.spot(window.hwnd) if window is not None else None
+
+    def _window_away(self):
+        return self.cfg["mode"] == "window" and self._window_spot is None
+
+    def _follow_window(self):
+        """Move with the window; hide the translations while it is minimized, closed or behind another one."""
+        window = self._chosen_window()
+        spot = None
+        if window is not None and not app_windows.hidden_behind(window.hwnd):
+            spot = app_windows.spot(window.hwnd)
+        key = None if spot is None else (spot[0].name(), spot[1].getRect())
+        if key == self._window_spot:
+            return
+        self._window_spot = key
+        self.overlay.clear()
+        self.scanner.restart()
+        if spot is None:
+            self.overlay.hide()
+        else:
+            self._apply_area()
 
     def use_screen(self, name):
         self._set(mode="screen", screen=name)
@@ -426,6 +477,8 @@ class LensApp(LensMenuMixin):
 
     def _where(self):
         _, rect = self.area()
+        if self.cfg["mode"] == "window":
+            return f"the window “{self.cfg['window_title'][:50]}”"
         return {"screen": "the whole screen", "mouse": "the lens around the mouse"}.get(
             self.cfg["mode"], f"an area of {rect.width()} × {rect.height()}")
 
@@ -514,6 +567,8 @@ class LensApp(LensMenuMixin):
         self.overlay.set_interactive(self.cfg["select_mode"] or ctrl_held())
         if self.cfg["mode"] == "mouse" and self.scanner.running:
             self._follow_mouse()
+        elif self.cfg["mode"] == "window" and self.scanner.running:
+            self._follow_window()
 
     # ---- tray ----------------------------------------------------------------
     def _tray_activated(self, reason):
@@ -574,6 +629,45 @@ class LensApp(LensMenuMixin):
         self.overlay.set_capture_hidden(not visible)
         self._notify("Translations show in screenshots and screen sharing" if visible
                      else "Translations are left out of screenshots and screen sharing")
+
+    RESET_TITLES = {"translate": "Translate", "languages": "Languages", "translator": "Translator",
+                    "appearance": "Appearance", "shortcuts": "Keyboard shortcuts"}
+
+    def reset(self, page):
+        """One page of settings back as it was when Lens was installed. Returns the keys another program holds
+        (the shortcuts page), else []."""
+        from . import lens_ocr
+        from .lens_app import DEFAULTS
+        from .lens_style import DEFAULT_STYLE
+
+        taken = []
+        tell, self.activity.tell = self.activity.tell, (lambda text: None)  # one note at the end, not one each
+        try:
+            if page == "translate":
+                if self.text_window is not None and not self.cfg["overlay_visible"]:
+                    self.text_window.only_here.setChecked(False)
+                self.set_lens_size(list(DEFAULTS["lens_size"]))
+                self.set_lens_frame(DEFAULTS["lens_frame"])
+                self._set_capture_visible(DEFAULTS["capture_visible"])
+                self.set_select_mode(DEFAULTS["select_mode"])
+                self._set_peek(DEFAULTS["peek_seconds"])
+                running = self.scanner.running
+                self.use_screen(DEFAULTS["screen"])
+                if not running:
+                    self.stop()
+            elif page == "languages":
+                self._set_and_restart(target_lang=DEFAULTS["target_lang"], ocr_language=lens_ocr.AUTO)
+            elif page == "translator":
+                self.set_translator(DEFAULTS["translator"])
+            elif page == "appearance":
+                self.apply_style(dict(DEFAULT_STYLE))
+            elif page == "shortcuts":
+                taken = self.apply_keys(lens_shortcuts.defaults())
+        finally:
+            self.activity.tell = tell
+        self.refresh_menu()
+        self._notify(f"{self.RESET_TITLES.get(page, page)}: back to the default settings")
+        return taken
 
     def _set_peek(self, seconds):
         self._set(peek_seconds=seconds)

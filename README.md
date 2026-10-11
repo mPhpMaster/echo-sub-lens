@@ -21,6 +21,8 @@ captions for anything your PC plays), released here as a project of its own. It 
 | *Appearance: font, size and colours, shown at once* | *A keyboard shortcut for every option* |
 | ![Translation window](docs/images/translation-window.png) | ![About](docs/images/window-about.png) |
 | *The translation window: a dialogue keeps a line, and its dash, for each speaker* | *About: version, author, links and ♥ support* |
+| ![Transparent translation window](docs/images/translation-window-transparent.png) | ![The right-click menu](docs/images/tray-menu.png) |
+| *Transparent, as much as you like: only the words stay solid* | *The right-click menu, in groups* |
 
 <p align="center"><img src="docs/images/progress-note.png" alt="A note in the corner of the screen while Lens translates"><br>
 <i>Everything Lens does shows in a small note in the corner of the screen.</i></p>
@@ -33,12 +35,16 @@ The pictures are made by `scripts\screenshots.py`.
 - **Click the Lens icon by the clock** to open the EchoSub Lens window: a big *Start / Stop translating* button
   that shows what Lens is doing, and every option on a page of its own — *Translate*, *Languages*, *Translator*,
   *Appearance*, *Keyboard shortcuts* and *About* — each with a line that says what it does. Closing the window keeps
-  Lens running by the clock; right-click the icon for the quick menu.
+  Lens running by the clock; right-click the icon for the quick menu, in groups: start, what to translate,
+  languages and translator, where the translations show, settings.
+- **Reset this page** on every settings page puts its settings back to the defaults.
 - *About*: the version, the author and his links (GitHub, LinkedIn, Discord, email), the license, the changelog
   and the source code.
 
 **What to translate**
 - **An area** you drag on any screen (`Ctrl+Alt+R`), or **a whole screen** — one of your monitors.
+- **A window**: choose a program's window (a video player, a game, a chat) and only its text is translated —
+  wherever you move it and whatever its size. While it is minimized or behind another window, Lens waits.
 - **A lens around the mouse** (`Ctrl+Alt+M`): only the text near the pointer, in a small framed box that follows
   the mouse. Stop on a line and its translation appears about half a second later. Four sizes, bigger / smaller.
 - **A file** (`Ctrl+Alt+F`): pictures (PNG, JPG, BMP, GIF, TIFF, WebP), PDF (scanned ones too), Word `.docx`
@@ -48,7 +54,9 @@ The pictures are made by `scripts\screenshots.py`.
 **The translated text in a window of its own**
 - **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —
   read it, select it, copy it. Show the original under each line, change the font size, and keep or hide the
-  translations over the screen.
+  translations over the screen. Make it **transparent**, as much as you like (the words stay solid, with a shadow),
+  and choose the **text direction**: automatic, right to left or left to right.
+- The translations over the screen can take a direction of their own too (*Appearance → Text direction*).
 
 **While it translates**
 - Press `Ctrl+Alt+T` — or *Start / Stop* in the window, or *Translating* in the right-click menu — to start or stop.

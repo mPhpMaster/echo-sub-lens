@@ -19,7 +19,9 @@ DEFAULT_STYLE = {
     "background": AUTO,          # AUTO: the page's own colour under the text
     "opacity": 1.0,              # of the background (the text itself is always solid)
     "radius": 2,                 # rounded corners, px
+    "direction": "auto",         # auto: right to left for Arabic, Hebrew, Persian, Urdu | rtl | ltr
 }
+DIRECTIONS = (("auto", "Automatic (from the language)"), ("rtl", "Right to left"), ("ltr", "Left to right"))
 
 
 def merged(style):
@@ -113,6 +115,11 @@ class AppearancePage(QWidget):
         self.radius.setSuffix(" px")
         self.radius.setValue(int(style["radius"]))
         form.addRow("Rounded corners", self.radius)
+        self.direction = QComboBox()
+        for value, text in DIRECTIONS:
+            self.direction.addItem(text, value)
+        self.direction.setCurrentIndex(max(0, self.direction.findData(style.get("direction", "auto"))))
+        form.addRow("Text direction", self.direction)
 
         reset = QPushButton("Restore the default look")
         reset.clicked.connect(lambda: self.load(DEFAULT_STYLE))
@@ -120,7 +127,7 @@ class AppearancePage(QWidget):
 
         for signal in (self.font_box.currentFontChanged, self.size_mode.currentIndexChanged, self.scale.valueChanged,
                        self.font_px.valueChanged, self.bold.toggled, self.opacity.valueChanged,
-                       self.radius.valueChanged):
+                       self.radius.valueChanged, self.direction.currentIndexChanged):
             signal.connect(self._changed)
         self._update_enabled()
 
@@ -135,6 +142,7 @@ class AppearancePage(QWidget):
             "background": self.background.value(),
             "opacity": self.opacity.value() / 100,
             "radius": self.radius.value(),
+            "direction": self.direction.currentData(),
         }
 
     def load(self, style):
@@ -149,6 +157,7 @@ class AppearancePage(QWidget):
                 choice.button.set_color(value)
         self.opacity.setValue(round(style["opacity"] * 100))
         self.radius.setValue(int(style["radius"]))
+        self.direction.setCurrentIndex(max(0, self.direction.findData(style.get("direction", "auto"))))
         self._changed()
 
     def _update_enabled(self):

@@ -21,7 +21,9 @@ OLD_INTERVAL_MS = 700  # the default before 1.1.0
 OLD_PEEK_SECONDS = 5   # the default before 1.1.1, when looking under the translations made them blink
 
 DEFAULTS = {
-    "mode": "screen",            # screen | area | mouse (a lens that follows the pointer)
+    "mode": "screen",            # screen | area | mouse (a lens that follows the pointer) | window
+    "window_title": "",          # mode "window": the window chosen (found again by its title and program)
+    "window_program": "",
     "mode_before_mouse": "screen",
     "lens_size": [480, 180],     # the lens around the mouse, logical pixels
     "lens_frame": True,          # a thin frame shows where the lens is

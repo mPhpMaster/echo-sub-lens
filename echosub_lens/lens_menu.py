@@ -40,49 +40,59 @@ class LensMenuMixin:
             old.deleteLater()
 
     def _build_menu(self):
+        """In groups: open and start; what to translate; languages; where translations show; the rest."""
         m = QMenu()
         opener = m.addAction("Open EchoSub Lens…", lambda: self.open_window())
         m.setDefaultAction(opener)  # shown in bold: what a click on the icon does
-        m.addSeparator()
         self.act_running = self._item(m, "Translating", "toggle", self.toggle, checkable=True,
                                       checked=self.scanner.running)
-        self._item(m, "Choose an area of the screen…", "area")
-        self.screen_menu = m.addMenu("Translate a whole screen")
+        m.addSeparator()
+
+        what = m.addMenu("What to translate")
+        self._item(what, "An area of the screen (choose it)…", "area")
+        self.screen_menu = what.addMenu("A whole screen")
         self._fill_screens()
-        self.act_mouse = self._item(m, "Lens around the mouse", "mouse_mode", lambda: None, checkable=True,
+        self.windows_menu = what.addMenu("A window")
+        self.windows_menu.aboutToShow.connect(self._fill_windows)
+        self.act_mouse = self._item(what, "A lens around the mouse", "mouse_mode", lambda: None, checkable=True,
                                     checked=self.cfg["mode"] == "mouse")
         self.act_mouse.toggled.connect(self.use_mouse_mode)
-        self._build_lens_menu(m)
+        self._build_lens_menu(what)
         self._item(m, "Translate a file (picture, PDF, Word, text)…", "file")
         m.addSeparator()
+
         self._choice_menu(m, "Translate into", self._target_choices(), lambda: self.cfg["target_lang"] or "",
                           lambda code: self.set_target(code or None))
         self._build_language_menu(m)
         self._choice_menu(m, "Translator", list(lens_translate.CHOICES.items()), lambda: self.cfg["translator"],
                           self.set_translator)
-        self._item(m, "Appearance (font, size, colours)…", "appearance")
-        self.act_capture = self._item(m, "Show translations in screenshots and screen sharing", "capture",
-                                      lambda: None, checkable=True, checked=self.cfg["capture_visible"])
-        self.act_capture.toggled.connect(self._set_capture_visible)
-        self.act_capture.setToolTip("Discord, Teams, OBS and screenshots show the translated screen")
-        self._choice_menu(m, "Look under the translations for changes", list(PEEK_CHOICES),
-                          lambda: self.cfg["peek_seconds"], self._set_peek)
         m.addSeparator()
-        self.act_select = self._item(m, "Select mode: translations take the mouse", "select_mode", lambda: None,
-                                     checkable=True, checked=self.cfg["select_mode"])
-        self.act_select.toggled.connect(self.set_select_mode)
-        tip = m.addAction("Tip: hold Ctrl to select and copy a translation")
-        tip.setEnabled(False)
-        self._item(m, "Copy all translations", "copy_all")
+
         self.act_text_window = self._item(m, "Translation window (the text in a box, above all windows)",
                                           "text_window", lambda: None, checkable=True,
                                           checked=self.text_window is not None)
         self.act_text_window.toggled.connect(self.show_text_window)
+        self._item(m, "Copy all translations", "copy_all")
+        shown = m.addMenu("Translations on the screen")
+        self._item(shown, "Appearance (font, size, colours, direction)…", "appearance")
+        self.act_capture = self._item(shown, "Show them in screenshots and screen sharing", "capture",
+                                      lambda: None, checkable=True, checked=self.cfg["capture_visible"])
+        self.act_capture.toggled.connect(self._set_capture_visible)
+        self.act_capture.setToolTip("Discord, Teams, OBS and screenshots show the translated screen")
+        self.act_select = self._item(shown, "Select mode: they take the mouse", "select_mode", lambda: None,
+                                     checkable=True, checked=self.cfg["select_mode"])
+        self.act_select.toggled.connect(self.set_select_mode)
+        tip = shown.addAction("Tip: hold Ctrl to select and copy a translation")
+        tip.setEnabled(False)
+        self._choice_menu(shown, "Look under them for changes", list(PEEK_CHOICES),
+                          lambda: self.cfg["peek_seconds"], self._set_peek)
         m.addSeparator()
-        self._item(m, "Settings (every option, look, keyboard shortcuts)…", "settings")
+
+        self._item(m, "Settings…", "settings")
         m.addAction("About EchoSub Lens…", lambda: self.open_window("about"))
         donate = m.addAction("♥ Support the developer (donate)…", self.donate)
         donate.setToolTip(DONATE_URL)
+        m.addSeparator()
         self._item(m, "Exit", "quit")
         return m
 
@@ -97,6 +107,24 @@ class LensMenuMixin:
             a.triggered.connect(lambda _=False, name=screen.name(): self.use_screen(name))
             group.addAction(a)
             self.screen_menu.addAction(a)
+
+    def _fill_windows(self):
+        """The windows open now, read again each time the menu opens."""
+        from . import app_windows
+
+        self.windows_menu.clear()
+        group = QActionGroup(self.windows_menu)
+        windows = app_windows.list_windows()
+        for window in windows:
+            chosen = (self.cfg["mode"] == "window" and window.title == self.cfg["window_title"]
+                      and window.program == self.cfg["window_program"])
+            a = QAction(window.label.replace("&", "&&"), self.windows_menu, checkable=True, checked=chosen)
+            a.triggered.connect(lambda _=False, w=window: self.use_window(w))
+            group.addAction(a)
+            self.windows_menu.addAction(a)
+        if not windows:
+            none = self.windows_menu.addAction("No other window is open")
+            none.setEnabled(False)
 
     def _build_lens_menu(self, m):
         menu = m.addMenu("Lens size and frame")
