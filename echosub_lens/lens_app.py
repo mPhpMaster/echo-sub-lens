@@ -18,6 +18,7 @@ INSTANCE_KEY = "EchoSub-Lens-single-instance"
 MUTEX_NAME = "EchoSubLensMutex"  # the installer checks it too
 VK_CONTROL = 0x11
 OLD_INTERVAL_MS = 700  # the default before 1.1.0
+OLD_PEEK_SECONDS = 5   # the default before 1.1.1, when looking under the translations made them blink
 
 DEFAULTS = {
     "mode": "screen",            # screen | area | mouse (a lens that follows the pointer)
@@ -31,7 +32,7 @@ DEFAULTS = {
     "translator": "same",
     "style": None,               # how translations look: lens_style.DEFAULT_STYLE, changed in Appearance
     "capture_visible": True,     # translations show in screenshots and screen sharing (Discord, OBS)
-    "peek_seconds": 5,           # how often Lens looks at the page under its translations; 0: never
+    "peek_seconds": 1,           # how often Lens looks at the page under its translations; 0: never
     "select_mode": False,        # translations take the mouse even without Ctrl
     "interval_ms": 400,          # ms between photos while nothing changes (faster while it settles)
     "shortcuts": None,           # {action: key}, see lens_shortcuts.ACTIONS; None = the default keys
@@ -59,6 +60,8 @@ def load_config():
     cfg["style"] = merged(cfg["style"])
     if cfg["interval_ms"] == OLD_INTERVAL_MS:  # the old default, saved with every setting: now quicker
         cfg["interval_ms"] = DEFAULTS["interval_ms"]
+    if cfg["peek_seconds"] == OLD_PEEK_SECONDS:
+        cfg["peek_seconds"] = DEFAULTS["peek_seconds"]
     return cfg
 
 

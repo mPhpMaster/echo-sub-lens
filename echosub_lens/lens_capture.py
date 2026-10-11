@@ -23,9 +23,12 @@ class Capturer:
         self._camera = None
         self._failed = not enabled
 
-    def grab(self, screen, rect):
-        """`rect` (logical pixels, relative to `screen`) as a QImage in the screen's own pixels."""
-        if not self._failed and screen is QGuiApplication.primaryScreen():
+    def grab(self, screen, rect, clean=False):
+        """`rect` (logical pixels, relative to `screen`) as a QImage in the screen's own pixels.
+
+        `clean`: right after a window was left out of screenshots. GDI shows that at once; DirectX only
+        in the next frame Windows puts together, which may be one already on its way."""
+        if not clean and not self._failed and screen is QGuiApplication.primaryScreen():
             try:
                 image = self._directx(screen, rect)
                 if image is not None:

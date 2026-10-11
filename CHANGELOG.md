@@ -3,6 +3,12 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] — 2026-10-11
+
+### Fixed
+- **Subtitles over a video no longer blink or get skipped.** With *Show translations in screenshots* on, every move of the video behind a subtitle took the translation away so Lens could look underneath, and since a video never stands still, Lens then waited up to 3 seconds before reading again: lines came late, blinked, or were missed altogether. Now the translation stays on the screen until the next one is ready, Lens looks underneath it in a few milliseconds (Windows leaves it out of that one photo; on the screen nothing changes), and a picture that keeps moving is read at least every 0.6 seconds.
+- Looking under the translations is now invisible, so it happens every second by default (it was every 5 seconds; *Every second* is a new choice).
+
 ## [1.1.0] — 2026-10-11
 
 ### Added

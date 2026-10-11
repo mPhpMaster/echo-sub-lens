@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -240,7 +241,8 @@ class CaptureTest(unittest.TestCase):
         scanner.translator = object()
         scanner.covered = lambda: covered
         scanner.peek_every = 0
-        scanner.grab = lambda: frames.pop(0) if frames else QImage()  # a late timer finds nothing
+        scanner.capturer = types.SimpleNamespace(  # a late timer finds nothing
+            grab=lambda screen, rect, clean=False: frames.pop(0) if frames else QImage())
         scanner._timer.start()  # running, without photographing anything by itself
         scanner.submitted = []
         scanner._jobs.put = lambda job: scanner.submitted.append(job[1])  # the photo
@@ -271,8 +273,9 @@ class CaptureTest(unittest.TestCase):
 
     def test_a_photo_showing_translations_is_never_read(self):
         box = QRect(10, 10, 90, 30)
-        scanner = self.make([self.frame(255), self.frame(255), self.frame(255, box), self.frame(0), self.frame(0),
-                             self.frame(0)], [])
+        clean = self.frame(0)
+        scanner = self.make([self.frame(255), self.frame(255), self.frame(255, box), self.frame(0, box, 255),
+                             self.frame(0, box, 255), clean], [])
         scanner.tick()  # the first photo: wait one more to be sure the screen is still
         scanner.tick()
         self.assertEqual(len(scanner.submitted), 1)  # the clean page
@@ -281,15 +284,25 @@ class CaptureTest(unittest.TestCase):
         scanner.covered = lambda: [box]  # translations on the screen now
         scanner.tick()  # same page, translation drawn: nothing to do
         self.assertEqual(len(scanner.submitted), 1)
-        stale = []
+        stale, looks = [], []
         scanner.stale.connect(lambda: stale.append(1))
-        scanner.tick()  # the page changed around the translation
-        self.assertEqual(stale, [1])
-        self.assertEqual(len(scanner.submitted), 1)  # not read: that photo has translations in it
-        scanner.covered = lambda: []  # they were taken away
-        scanner.tick()
-        scanner.tick()
+        scanner.peeking = looks.append
+        scanner.tick()  # the page changed around the translation...
+        scanner.tick()  # ... and is still
+        self.assertEqual(stale, [])  # the translations stay on the screen (no blinking over a video)...
+        self.assertEqual(looks, [True, False])  # ... left out of one photo for a moment
         self.assertEqual(len(scanner.submitted), 2)
+        self.assertIs(scanner.submitted[1], clean)  # and that photo is read, not the one with translations
+
+    def test_a_video_behind_the_text_is_read_often(self):
+        frames = [self.frame(v) for v in (10, 60, 110, 160, 210)]
+        scanner = self.make(frames, [])
+        scanner.tick()
+        self.assertEqual(scanner.submitted, [])  # moving: wait a moment for it to settle...
+        scanner._changing_since -= lens_scanner.MAX_WAIT
+        scanner.tick()
+        self.assertEqual(len(scanner.submitted), 1)  # ... but not long
+        self.assertLessEqual(lens_scanner.MAX_WAIT, 1.0)
 
     def test_looking_under_the_translations_finds_a_change(self):
         box = QRect(0, 0, 192, 108)  # the translation covers everything
@@ -305,28 +318,27 @@ class CaptureTest(unittest.TestCase):
         stale = []
         scanner.stale.connect(lambda: stale.append(1))
         scanner.tick()
-        self.assertEqual(looks, [True])
-        scanner._peeked()  # what the timer does a moment later
         self.assertEqual(looks, [True, False])
         self.assertEqual(stale, [])  # the translations stay on the screen...
         self.assertEqual(len(scanner.submitted), 2)  # ... while the clean photo is read again
 
-    def test_a_look_that_still_shows_the_translations_is_ignored(self):
-        box = QRect(0, 0, 192, 108)
-        with_translation = self.frame(255, box, 0)
-        scanner = self.make([self.frame(255), self.frame(255), with_translation, self.frame(255, box, 0)], [])
+    def test_when_only_the_translations_changed_the_photo_nothing_is_read(self):
+        box = QRect(10, 10, 90, 30)
+        drawn = QRect(5, 5, 110, 45)  # a little wider than Lens thinks
+        scanner = self.make([self.frame(255), self.frame(255), self.frame(255, drawn), self.frame(255, drawn),
+                             self.frame(255), self.frame(255, drawn)], [])
         scanner.tick()
         scanner.tick()
         scanner._busy, scanner._showing = False, True
         scanner.covered = lambda: [box]
-        scanner.peek_every = 1
-        scanner._last_clean = 0.0
-        scanner.peeking = lambda on: None
-        stale = []
-        scanner.stale.connect(lambda: stale.append(1))
+        looks = []
+        scanner.peeking = looks.append
         scanner.tick()
-        scanner._peeked()  # Windows had not left them out of the photo yet
-        self.assertEqual(stale, [])
+        scanner.tick()  # looks changed: a look underneath finds the same page
+        self.assertEqual(looks, [True, False])
+        self.assertEqual(len(scanner.submitted), 1)
+        scanner.tick()  # the same photo again: no need to look again
+        self.assertEqual(looks, [True, False])
         self.assertEqual(len(scanner.submitted), 1)
 
     def test_nothing_changes_while_somebody_copies(self):

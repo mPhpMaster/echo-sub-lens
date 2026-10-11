@@ -8,7 +8,8 @@ from PySide6.QtWidgets import QMenu
 from . import languages, lens_follow, lens_ocr, lens_shortcuts, lens_translate
 from .languages import QUICK_TARGETS
 
-PEEK_CHOICES = ((0, "Never"), (2, "Every 2 seconds"), (5, "Every 5 seconds"), (10, "Every 10 seconds"))
+PEEK_CHOICES = ((0, "Never"), (1, "Every second"), (2, "Every 2 seconds"), (5, "Every 5 seconds"),
+                (10, "Every 10 seconds"))
 LANGUAGE_SETTINGS = "ms-settings:regionlanguage"
 
 

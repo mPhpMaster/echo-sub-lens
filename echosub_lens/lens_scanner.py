@@ -28,8 +28,7 @@ log = logging.getLogger(__name__)
 THUMB = (192, 108)
 PIXEL_CHANGE = 24        # grey levels a thumbnail pixel must move to count as changed
 CHANGED_SHARE = 0.002    # share of changed thumbnail pixels that means "the screen changed"
-MAX_WAIT = 3.0           # s: read a picture that never settles (a video) at least this often
-PEEK_MS = 120            # how long the translations are left out of photos while Lens looks underneath
+MAX_WAIT = 0.6           # s: read a picture that never settles (a video) at least this often
 MIN_VISIBLE = 0.05       # below this share of the area left uncovered, only looking underneath tells
 EDGE = 3                 # px: a block this close to the left or right side may be a word cut in two
 FRAGMENT = 0.2           # ... and if it is narrower than this share of the area, it is left out
@@ -190,8 +189,7 @@ class LensScanner(QObject):
         self.capturer = lens_capture.Capturer()
         self.idle_ms = interval_ms   # ms between photos while nothing changes
         self._reread_due = False
-        self._peek_force = False
-        self.peek_every = 5.0        # s between looks under the translations; 0: never
+        self.peek_every = 1.0        # s between looks under the translations; 0: never
         self.trim_edges = False      # leave out words cut by the sides (the lens around the mouse)
         self.generation = 0
         self._timer = QTimer(self)
@@ -203,7 +201,7 @@ class LensScanner(QObject):
         self._last_blocks = None     # the translations of that photo
         self._changing_since = None
         self._busy = False
-        self._peek_pending = False
+        self._settled = None         # a photo with the translations in it that shows the page as read
         self._last_clean = 0.0       # when a photo without translations was last taken
         self._jobs = queue.Queue(maxsize=1)
         self._done.connect(self._finished)
@@ -230,7 +228,7 @@ class LensScanner(QObject):
     def restart(self):
         """Forget what was read (new area, language or translator): everything is read again."""
         self.generation += 1
-        self._previous = self._submitted = self._last_blocks = None
+        self._previous = self._submitted = self._settled = self._last_blocks = None
         self._changing_since = None
         self._reread_due = False
         if self._showing:
@@ -255,7 +253,7 @@ class LensScanner(QObject):
             self._timer.setInterval(interval)
 
     def _tick(self):
-        if self.area is None or self.translator is None or self._peek_pending or self.paused():
+        if self.area is None or self.translator is None or self.paused():
             return
         rect = self.area[1]
         covered = self.covered()
@@ -269,72 +267,64 @@ class LensScanner(QObject):
         thumb = thumbnail(image)
         moving = changed(thumb, self._previous, hidden)
         self._previous = thumb
-        if not changed(thumb, self._submitted, hidden):
+        if not changed(thumb, self._submitted, hidden) or not changed(thumb, self._settled, hidden):
             self._changing_since = None
             if not self._showing and self._last_blocks is not None and not self._busy:
                 self._showing = True  # back to what was translated (a hover or a menu went away)
                 self.result.emit(self._last_blocks)
-            elif self._reread_due and not self._busy:
-                self._reread(covered, thumb, image)
-            elif covered and not self._busy and self.peek_due(now):
-                self._peek()
+            elif self._busy:
+                pass
+            elif self._reread_due:
+                self._reread_due = False  # text was still being written out: read the same place again
+                self._read(covered, thumb, image, force=True)
+            elif covered and self.peek_due(now):
+                self._read(covered, thumb, image)  # did the page under the translations change?
             return
-        self._mark_changed(now)
-        if covered:
-            return  # this photo shows translations: read the next one, taken without them
+        # The translations stay on the screen until the new ones are ready: a video moving behind a
+        # subtitle must not make them blink
+        if self._changing_since is None:
+            self._changing_since = now
         if (moving and now - self._changing_since < MAX_WAIT) or self._busy:
             return
         self._changing_since = None
-        self._submit(thumb, image)
+        self._read(covered, thumb, image)
 
-    def _reread(self, covered, thumb, image):
-        """Text was still being written out: read the same place again once it has had a moment."""
-        self._reread_due = False
+    def _read(self, covered, thumb, image, force=False):
+        """Hand the page over to be read, never a photo with Lens's own translations in it."""
         if covered:
-            self._peek(force=True)  # a photo without the translations, which stay on the screen
-        else:
-            self._submit(thumb, image)
+            settled = thumb
+            image = self.grab_clean()
+            self._last_clean = time.monotonic()
+            if image is None or image.isNull():
+                return
+            thumb = thumbnail(image)
+            if not force and not changed(thumb, self._submitted):
+                self._settled = settled  # only the translations changed the photo: it shows the same page
+                return
+        self._submit(thumb, image)
 
     def _submit(self, thumb, image):
         self._busy = True
         self.working.emit(True)
         self._submitted = thumb
+        self._settled = None
         scale = self.scale()
         blocked = [(r.x() * scale, r.y() * scale, r.width() * scale, r.height() * scale) for r in self.blocked()]
         self._jobs.put((self.generation, image, self.target, self.ocr_language, self.translator,
                         self.trim_edges, blocked))
 
-    def _mark_changed(self, now):
-        if self._changing_since is None:
-            self._changing_since = now
-        if self._showing:
-            self._showing = False
-            self.stale.emit()
-
     def peek_due(self, now):
         return bool(self.peek_every) and now - self._last_clean >= self.peek_every
 
-    def _peek(self, force=False):
-        """Hide the translations for a moment and look whether the page under them changed."""
-        self._peek_pending = True
-        self._peek_force = force
+    def grab_clean(self):
+        """A photo of the page under the translations, which stay on the screen: Windows leaves them out
+        of the photo for the few milliseconds it takes."""
         self.peeking(True)
-        QTimer.singleShot(PEEK_MS, self._peeked)
-
-    def _peeked(self):
         try:
-            image = self.grab() if self.area else None
+            screen, rect = self.area
+            return self.capturer.grab(screen, rect, clean=True)
         finally:
             self.peeking(False)
-            self._peek_pending = False
-        self._last_clean = time.monotonic()
-        if image is None or image.isNull() or self._busy:
-            return
-        thumb = thumbnail(image)
-        if not changed(thumb, self._previous):
-            return  # the same as a photo with the translations in it: they were not left out after all
-        if self._peek_force or changed(thumb, self._submitted):
-            self._submit(thumb, image)  # read it again; the translations stay until the new ones are ready
 
     def _finished(self, generation, blocks, error):
         self._busy = False

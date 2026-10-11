@@ -4,7 +4,7 @@
 
 APP_NAME = "EchoSub Lens"
 APP_ID = "EchoSubLens"
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 AUTHOR = "Mohammad Al-Safadi"
 COPYRIGHT = f"Copyright © 2026 {AUTHOR}"
