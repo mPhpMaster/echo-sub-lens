@@ -99,6 +99,17 @@ class TranslatorTest(unittest.TestCase):
         self.assertEqual(t.translate_many(["a", "b"], "ar"), ["<a>", "<b>"])
         self.assertEqual(backend.calls, ["a\nb", "a", "b"])
 
+    def test_progress_is_reported_for_new_text_only(self):
+        class Batches(FakeOffline):
+            def translate_many(self, texts, src, tgt):
+                return [t.upper() for t in texts]
+
+        t = lens_translate.LensTranslator("x", factory=lambda k, d: Batches())
+        t.translate_many(["a"], "ar")
+        steps = []
+        t.translate_many(["a"] + [f"t{i}" for i in range(20)], "ar", progress=lambda d, n: steps.append((d, n)))
+        self.assertEqual(steps, [(0, 20), (16, 20), (20, 20)])
+
     def test_text_already_translated_is_not_asked_again(self):
         backend = FakeOffline()
         t = lens_translate.LensTranslator("nllb-600m", factory=lambda key, device: backend)
@@ -282,7 +293,7 @@ class CaptureTest(unittest.TestCase):
 
     def test_looking_under_the_translations_finds_a_change(self):
         box = QRect(0, 0, 192, 108)  # the translation covers everything
-        scanner = self.make([self.frame(255), self.frame(255), self.frame(255, box, 0), self.frame(0)], [])
+        scanner = self.make([self.frame(255), self.frame(255), self.frame(255, box, 0), self.frame(128)], [])
         scanner.tick()
         scanner.tick()
         scanner._busy, scanner._showing = False, True
@@ -297,7 +308,26 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(looks, [True])
         scanner._peeked()  # what the timer does a moment later
         self.assertEqual(looks, [True, False])
-        self.assertEqual(stale, [1])
+        self.assertEqual(stale, [])  # the translations stay on the screen...
+        self.assertEqual(len(scanner.submitted), 2)  # ... while the clean photo is read again
+
+    def test_a_look_that_still_shows_the_translations_is_ignored(self):
+        box = QRect(0, 0, 192, 108)
+        with_translation = self.frame(255, box, 0)
+        scanner = self.make([self.frame(255), self.frame(255), with_translation, self.frame(255, box, 0)], [])
+        scanner.tick()
+        scanner.tick()
+        scanner._busy, scanner._showing = False, True
+        scanner.covered = lambda: [box]
+        scanner.peek_every = 1
+        scanner._last_clean = 0.0
+        scanner.peeking = lambda on: None
+        stale = []
+        scanner.stale.connect(lambda: stale.append(1))
+        scanner.tick()
+        scanner._peeked()  # Windows had not left them out of the photo yet
+        self.assertEqual(stale, [])
+        self.assertEqual(len(scanner.submitted), 1)
 
     def test_nothing_changes_while_somebody_copies(self):
         scanner = self.make([], [])
@@ -334,6 +364,17 @@ class StyleTest(unittest.TestCase):
         self.assertTrue(label.font().bold())
         self.assertIn("rgba(17, 34, 51", label.styleSheet())
         self.assertIn("border-radius: 6px", label.styleSheet())
+        overlay.close()
+
+    def test_the_same_translations_are_not_drawn_again(self):
+        overlay = LensOverlay()
+        overlay.cover(QRect(0, 0, 600, 300), 1.0)
+        overlay.show_blocks([Block([line("Delete account", 100, 50)], translation="x y")], "fr")
+        first = overlay.labels[0]
+        overlay.show_blocks([Block([line("Delete account", 101, 50)], translation="x y")], "fr")
+        self.assertIs(overlay.labels[0], first)  # nothing flickers
+        overlay.show_blocks([Block([line("Delete account", 100, 50)], translation="z")], "fr")
+        self.assertIsNot(overlay.labels[0], first)
         overlay.close()
 
     def test_covered_is_empty_when_hidden_from_screenshots(self):
@@ -423,6 +464,118 @@ class AppTest(unittest.TestCase):
             lens.stop()
             lens.tray.hide()
             lens.overlay.close()
+
+    def test_loading_and_downloading_the_translator_is_shown(self):
+        from echosub_lens import lens_ui
+
+        with mock.patch.object(lens_ui.hotkeys.GlobalHotkeys, "enable_keys", return_value=[]), \
+                mock.patch("echosub_lens.lens_menu.lens_ocr.available_languages", return_value=["en-US"]), \
+                mock.patch.object(lens_ui.LensScanner, "start"):
+            lens = lens_ui.LensApp(app, dict(lens_app.DEFAULTS), lambda cfg: None,
+                                   base_cfg={"target_lang": "ar", "translator": "google"})
+            said = []
+            lens.activity.changed.connect(lambda source, text, percent: said.append((source, text, percent)))
+            lens._download_event({"state": "progress", "title": "Translation model (NLLB-600M)",
+                                  "done": 300 * 1024 * 1024, "total": 600 * 1024 * 1024})
+            self.assertEqual(said[-1], ("translator", "Downloading the translation model (NLLB-600M)… 50% "
+                                                      "(300.0 MB of 600.0 MB)", 50))
+            with mock.patch.object(lens_ui.translate, "create", return_value="backend"):
+                self.assertEqual(lens._load_translator("google", "cpu", True), "backend")
+            self.assertEqual(said[-2], ("translator", "Loading the translator (Google Translate)…", -1))
+            self.assertEqual(said[-1], ("translator", "", -1))
+            lens.scanner.working.emit(True)
+            self.assertEqual(lens.busy.text, "Reading and translating the screen…")
+            lens.stop()
+            self.assertEqual(lens.busy.text, "")
+            lens.tray.hide()
+            lens.overlay.close()
+
+
+class TextWindowTest(unittest.TestCase):
+    def test_text_is_in_reading_order_with_the_original_on_request(self):
+        from echosub_lens import lens_text_window
+
+        blocks = [Block([line("World", 200, 10)], translation="B"), Block([line("Below", 10, 60)], translation="C"),
+                  Block([line("Hello", 10, 12)], translation="A")]
+        self.assertEqual(lens_text_window.window_text(blocks), "A\nB\nC")
+        self.assertEqual(lens_text_window.window_text(blocks[:1], with_original=True), "B\n    (World)")
+
+    def test_the_window_shows_translations_and_can_take_them_off_the_screen(self):
+        from echosub_lens import lens_ui
+
+        saved = []
+        with mock.patch.object(lens_ui.hotkeys.GlobalHotkeys, "enable_keys", return_value=[]), \
+                mock.patch("echosub_lens.lens_menu.lens_ocr.available_languages", return_value=["en-US"]), \
+                mock.patch.object(lens_ui.LensScanner, "start"):
+            lens = lens_ui.LensApp(app, dict(lens_app.DEFAULTS), lambda cfg: saved.append(dict(cfg)),
+                                   base_cfg={"target_lang": "ar", "translator": "google"})
+            lens.overlay.cover(QRect(0, 0, 600, 300), 1.0)
+            lens.act_text_window.toggle()
+            window = lens.text_window
+            self.assertTrue(window.isVisible())
+            self.assertTrue(saved[-1]["text_window"])
+            lens._show([Block([line("Delete account", 100, 50)], translation="حذف الحساب")])
+            self.assertEqual(window.box.toPlainText(), "حذف الحساب")
+            self.assertEqual(len(lens.overlay.labels), 1)
+            window.overlay.setChecked(False)  # only in the window
+            self.assertFalse(saved[-1]["overlay_visible"])
+            self.assertEqual(lens.overlay.labels, [])
+            lens._show([Block([line("Save", 100, 50)], translation="حفظ")])
+            self.assertEqual(lens.overlay.labels, [])
+            self.assertEqual(window.box.toPlainText(), "حفظ")
+            window.close()  # closing it puts the translations back over the screen
+            self.assertIsNone(lens.text_window)
+            self.assertFalse(saved[-1]["text_window"])
+            self.assertTrue(saved[-1]["overlay_visible"])
+            self.assertFalse(lens.act_text_window.isChecked())
+            lens.stop()
+            lens.tray.hide()
+            lens.overlay.close()
+
+
+class BusyTest(unittest.TestCase):
+    def test_the_newest_work_is_shown_and_quick_work_never_appears(self):
+        from echosub_lens.lens_busy import BusyIndicator
+
+        busy = BusyIndicator()
+        busy.set("screen", "Reading…")
+        self.assertFalse(busy.isVisible())  # only after a moment
+        busy.set("translator", "Downloading…", 40)
+        self.assertEqual((busy.text, busy.percent), ("Downloading…", 40))
+        busy._appear()
+        self.assertTrue(busy.isVisible())
+        busy.set("translator", "")
+        self.assertEqual(busy.text, "Reading…")
+        busy.set("screen", "")
+        self.assertFalse(busy.isVisible())
+        busy.set("screen", "Reading…")
+        busy.set("screen", "")
+        self.assertFalse(busy._due.isActive())
+
+    def test_the_splash_shows_its_message_and_closes(self):
+        from echosub_lens.lens_busy import SplashScreen
+
+        splash = SplashScreen()
+        splash.start()
+        self.assertTrue(splash.isVisible())
+        splash.show_message("Loading…")
+        self.assertEqual(splash.message, "Loading…")
+        splash._shown_at = None  # seen long enough
+        splash.finish()
+        app.processEvents()
+        QApplicationWait.until(lambda: not splash.isVisible())
+        self.assertFalse(splash.isVisible())
+
+
+class QApplicationWait:
+    @staticmethod
+    def until(condition, ms=2000):
+        from PySide6.QtCore import QElapsedTimer
+
+        timer = QElapsedTimer()
+        timer.start()
+        while not condition() and timer.elapsed() < ms:
+            app.processEvents()
 
 
 if __name__ == "__main__":

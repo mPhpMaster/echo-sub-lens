@@ -8,7 +8,8 @@ from PySide6.QtCore import QRect, QTimer
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QSystemTrayIcon
 
-from . import config, hotkeys, languages, lens_files, lens_follow, lens_shortcuts, lens_translate, translate
+from . import config, downloads, hotkeys, languages, lens_files, lens_follow, lens_shortcuts, lens_translate, translate
+from .lens_busy import Activity, BusyIndicator
 from .lens_app import LENS_NAME, ctrl_held
 from .lens_menu import LensMenuMixin
 from .lens_overlay import LensOverlay
@@ -50,6 +51,12 @@ class LensApp(LensMenuMixin):
         self._anchor = None          # where the pointer was when the lens was last placed
         self.settings_window = None
         self.file_windows = []
+        self.text_window = None
+        self._save_text_window = QTimer()
+        self._save_text_window.setSingleShot(True)
+        self._save_text_window.setInterval(600)
+        self._save_text_window.timeout.connect(lambda: self._set(text_window_settings=self.text_window.settings())
+                                               if self.text_window is not None else None)
         self.overlay = LensOverlay(cfg["style"])
         self.overlay.capture_hidden = not cfg["capture_visible"]
         self.scanner = LensScanner(cfg["interval_ms"])
@@ -60,6 +67,14 @@ class LensApp(LensMenuMixin):
         self.scanner.result.connect(self._show)
         self.scanner.stale.connect(self.overlay.clear)
         self.scanner.status.connect(self._on_status)
+        self.busy = BusyIndicator()
+        self.busy.screen_of = lambda: self.area()[0]
+        self.activity = Activity()
+        self.activity.changed.connect(self.busy.set)
+        self.scanner.working.connect(
+            lambda on: self.activity.say("screen", "Reading and translating the screen…" if on else "", 0))
+        self.scanner.progress.connect(
+            lambda text, percent: self.scanner._busy and self.activity.say("screen", text, percent))
         self._translators = {}
         self.hotkeys = hotkeys.GlobalHotkeys()
         self.mouse_timer = QTimer()
@@ -73,6 +88,8 @@ class LensApp(LensMenuMixin):
         taken = self.register_keys(self.keys)
         if taken:
             log.warning("Lens keys already in use by another program: %s", ", ".join(taken))
+        if cfg["text_window"]:
+            self.show_text_window(True)
         QGuiApplication.instance().screenAdded.connect(lambda _: self._fill_screens())
         QGuiApplication.instance().screenRemoved.connect(lambda _: self._fill_screens())
         self.start()
@@ -93,6 +110,7 @@ class LensApp(LensMenuMixin):
             "translator_next": self.next_translator,
             "select_mode": lambda: self.act_select.toggle(),
             "copy_all": self.overlay.copy_all,
+            "text_window": lambda: self.act_text_window.toggle(),
             "capture": lambda: self.act_capture.toggle(),
             "appearance": lambda: self.open_settings("appearance"),
             "settings": lambda: self.open_settings("shortcuts"),
@@ -141,8 +159,29 @@ class LensApp(LensMenuMixin):
                 device = "cpu"
             fast_cpu = self.base_cfg.get("fast_cpu_translation", True)
             self._translators[key] = lens_translate.LensTranslator(
-                key, device, factory=lambda k, d: translate.create(k, d, fast_cpu=fast_cpu))
+                key, device, factory=lambda k, d: self._load_translator(k, d, fast_cpu))
         return self._translators[key]
+
+    def _load_translator(self, key, device, fast_cpu):
+        """Runs in a worker thread the first time a translator is needed; says so on the screen."""
+        name = config.TRANSLATORS.get(key, key).split(" — ")[0]
+        self.activity.say("translator", f"Loading the translator ({name})…")
+        downloader = downloads.ModelDownloader(on_event=self._download_event)
+        try:
+            return translate.create(key, device, downloader=downloader, fast_cpu=fast_cpu)
+        finally:
+            self.activity.say("translator")
+
+    def _download_event(self, event):
+        if event["state"] in ("start", "progress"):
+            done, total = event["done"], event["total"]
+            share = ""
+            if total:
+                share = f" {done * 100 // total}% ({downloads.human_size(done)} of {downloads.human_size(total)})"
+            title = event["title"][:1].lower() + event["title"][1:]
+            self.activity.say("translator", f"Downloading the {title}…{share}", done * 100 // total if total else -1)
+        elif event["state"] == "finished":
+            self.activity.say("translator", "Loading the translator…")
 
     def set_target(self, code):
         self._set_and_restart(target_lang=code)
@@ -297,6 +336,7 @@ class LensApp(LensMenuMixin):
     def stop(self):
         self.scanner.stop()
         self.mouse_timer.stop()
+        self.activity.say("screen")
         self.overlay.clear()
         self.overlay.hide()
         self._update_state()
@@ -323,8 +363,46 @@ class LensApp(LensMenuMixin):
         self.tray.setToolTip(f"{LENS_NAME} — {state}")
 
     def _show(self, blocks):
-        self.overlay.show_blocks(blocks, self.target)
+        if self.cfg["overlay_visible"]:
+            self.overlay.show_blocks(blocks, self.target)
+        if self.text_window is not None:
+            self.text_window.show_blocks(blocks, self.target)
         self._update_state()
+
+    # ---- the translation window ------------------------------------------------
+    def show_text_window(self, on):
+        if on and self.text_window is None:
+            from .lens_text_window import TextWindow
+
+            self.text_window = TextWindow(self.cfg["text_window_settings"], self.cfg["overlay_visible"])
+            self.text_window.changed.connect(self._text_window_changed)
+            self.text_window.closed.connect(lambda: self.show_text_window(False))
+            if self.overlay._blocks:
+                self.text_window.show_blocks(self.overlay._blocks, self.target)
+            self.text_window.show()
+        elif not on and self.text_window is not None:
+            window, self.text_window = self.text_window, None
+            self._set(text_window_settings=window.settings(), overlay_visible=True)
+            window.closed.disconnect()
+            window.close()
+            window.deleteLater()
+            if self.scanner.running:
+                self.scanner.restart()  # draw the translations over the screen again
+        else:
+            return
+        self._set(text_window=on)
+        self.act_text_window.blockSignals(True)
+        self.act_text_window.setChecked(on)
+        self.act_text_window.blockSignals(False)
+
+    def _text_window_changed(self, settings):
+        if settings["overlay"] != self.cfg["overlay_visible"]:
+            self._set(overlay_visible=settings["overlay"])
+            if settings["overlay"]:
+                self.scanner.restart()
+            else:
+                self.overlay.clear()
+        self._save_text_window.start()
 
     def _on_status(self, text):
         log.warning("Lens: %s", text)
@@ -402,6 +480,11 @@ class LensApp(LensMenuMixin):
     def quit(self):
         self.scanner.stop()
         self.hotkeys.disable()
+        self.busy.clear()
+        if self.text_window is not None:
+            self._set(text_window_settings=self.text_window.settings())
+            self.text_window.closed.disconnect()
+            self.text_window.close()
         for window in list(self.file_windows):
             window.close()
         self.tray.hide()

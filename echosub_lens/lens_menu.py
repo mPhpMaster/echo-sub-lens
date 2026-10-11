@@ -70,6 +70,10 @@ class LensMenuMixin:
         tip = m.addAction("Tip: hold Ctrl to select and copy a translation")
         tip.setEnabled(False)
         self._item(m, "Copy all translations", "copy_all")
+        self.act_text_window = self._item(m, "Translation window (the text in a box, above all windows)",
+                                          "text_window", lambda: None, checkable=True,
+                                          checked=self.text_window is not None)
+        self.act_text_window.toggled.connect(self.show_text_window)
         m.addSeparator()
         self._item(m, "Settings (look, keyboard shortcuts)…", "settings")
         self._item(m, "Exit", "quit")

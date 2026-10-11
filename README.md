@@ -17,6 +17,11 @@ captions for anything your PC plays), released here as a project of its own. It 
   (headings, tables, bold and colours kept — only the words change), text and subtitle files (`.txt`, `.srt`, `.md`,
   `.csv`; subtitle numbers and times stay). Save a translated copy; the original is never changed.
 
+**The translated text in a window of its own**
+- **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —
+  read it, select it, copy it. Show the original under each line, change the font size, and keep or hide the
+  translations over the screen.
+
 **While it translates**
 - Click the tray icon or press `Ctrl+Alt+T` to start or stop.
 - Clicks, scrolling and typing go straight through to the page or program underneath.

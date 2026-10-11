@@ -23,6 +23,7 @@ ACTIONS = {
     "translator_next": ("Switch to the next translator", ""),
     "select_mode": ("Select mode on / off", ""),
     "copy_all": ("Copy all translations", ""),
+    "text_window": ("Translation window on / off", "Ctrl+Alt+W"),
     "capture": ("Show in screenshots and screen sharing on / off", ""),
     "appearance": ("Appearance (font, size, colours)", ""),
     "settings": ("Open the settings", ""),

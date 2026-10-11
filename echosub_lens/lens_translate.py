@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 CACHE_SIZE = 5000
 GOOGLE_CHUNK = 4000      # characters per Google request (its limit is 5000)
+NLLB_BATCH = 16          # texts per pass of the offline model: big enough to be fast, small enough to show progress
 SAME = "same"            # the default: EchoSub's translator when EchoSub is on this PC, else Google
 CHOICES = {
     SAME: "Default",
@@ -61,17 +62,26 @@ class LensTranslator:
     def cached(self, text, target):
         return self._cache.get((target, text))
 
-    def translate_many(self, texts, target):
+    def translate_many(self, texts, target, progress=None):
+        """`progress(done, total)` hears how many of the texts not translated before are done."""
+        progress = progress or (lambda done, total: None)
         with self._lock:
             todo = [t for t in dict.fromkeys(texts) if (target, t) not in self._cache]
             if todo:
                 backend = self._get_backend()
+                progress(0, len(todo))
                 if isinstance(backend, translate.GoogleTranslator):
-                    results = self._google(backend, todo, target)
-                elif hasattr(backend, "translate_many"):  # NLLB: one pass for the whole screen
-                    results = backend.translate_many(todo, "auto", target)
+                    results = self._google(backend, todo, target, progress)
+                elif hasattr(backend, "translate_many"):  # NLLB: many texts per pass over the model
+                    results = []
+                    for start in range(0, len(todo), NLLB_BATCH):
+                        results += backend.translate_many(todo[start:start + NLLB_BATCH], "auto", target)
+                        progress(len(results), len(todo))
                 else:
-                    results = [backend.translate(t, "auto", target) for t in todo]
+                    results = []
+                    for text in todo:
+                        results.append(backend.translate(text, "auto", target))
+                        progress(len(results), len(todo))
                 for text, result in zip(todo, results):
                     self._remember((target, text), result or text)
             return [self._cache.get((target, t), t) for t in texts]
@@ -83,7 +93,7 @@ class LensTranslator:
             self._cache.popitem(last=False)
 
     @staticmethod
-    def _google(backend, texts, target):
+    def _google(backend, texts, target, progress=lambda done, total: None):
         """Many lines in one request: Google keeps line breaks, so the answer splits back line by line."""
         results = []
         for chunk in _chunks(texts, GOOGLE_CHUNK):
@@ -93,6 +103,7 @@ class LensTranslator:
             if len(parts) != len(chunk):  # lines merged or split: ask for each one on its own
                 parts = [backend.translate(t, "auto", target) for t in chunk]
             results.extend(parts)
+            progress(len(results), len(texts))
         return results
 
 

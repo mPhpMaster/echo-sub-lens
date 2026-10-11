@@ -35,6 +35,9 @@ DEFAULTS = {
     "interval_ms": 700,
     "shortcuts": None,           # {action: key}, see lens_shortcuts.ACTIONS; None = the default keys
     "last_folder": "",           # where "Translate a file" opens
+    "text_window": False,        # the translation window (the translated text in a box, above all windows)
+    "text_window_settings": None,  # its place, size, font size and "original text too"
+    "overlay_visible": True,     # the translations over the screen (turned off from the translation window)
 }
 
 
@@ -112,10 +115,19 @@ def main():
     if server is None:
         _wake_running_copy()
         return 0
+    from .lens_busy import SplashScreen
+
+    splash = SplashScreen()
+    splash.start()
+    log.info("%s %s starting", LENS_NAME, __version__)
+    splash.show_message("Loading…")
     from .lens_ui import LensApp
 
-    log.info("%s %s starting", LENS_NAME, __version__)
+    splash.show_message("Getting the screen reader ready…")
     lens = LensApp(qt, load_config(), save_config)
+    splash.show_message("Ready — the Lens icon is by the clock")
+    splash.finish()
+    main.splash = splash
     for path in files_to_open(sys.argv[1:]):  # "EchoSubLens.exe report.pdf"
         lens.open_file(path)
     server.newConnection.connect(lambda: (server.nextPendingConnection(), lens.already_running()))

@@ -8,8 +8,9 @@ translations are taken away; once it settles, a worker thread reads the text and
 
 The translations show in screenshots (so screen sharing shows them too), which means Lens's own
 photos contain them. Where a translation lies is left out of the comparison, the text is only ever
-read from a photo without translations, and every few seconds Lens makes them invisible for a frame
-to see whether the page underneath changed.
+read from a photo without translations, and every few seconds Lens leaves them out of one photo (they
+stay on the screen) to see whether the page underneath changed. If it did, that photo is read again
+in the background while the old translations stay; identical results are not drawn again.
 """
 import logging
 import queue
@@ -28,7 +29,7 @@ THUMB = (192, 108)
 PIXEL_CHANGE = 24        # grey levels a thumbnail pixel must move to count as changed
 CHANGED_SHARE = 0.002    # share of changed thumbnail pixels that means "the screen changed"
 MAX_WAIT = 3.0           # s: read a picture that never settles (a video) at least this often
-PEEK_MS = 60             # how long the translations are invisible while Lens looks underneath
+PEEK_MS = 120            # how long the translations are left out of photos while Lens looks underneath
 MIN_VISIBLE = 0.05       # below this share of the area left uncovered, only looking underneath tells
 EDGE = 3                 # px: a block this close to the left or right side may be a word cut in two
 FRAGMENT = 0.2           # ... and if it is narrower than this share of the area, it is left out
@@ -102,6 +103,8 @@ class LensScanner(QObject):
     result = Signal(object)
     stale = Signal()
     status = Signal(str)
+    working = Signal(bool)  # True while a photo is being read and translated
+    progress = Signal(str, int)  # what the worker is doing, and how far it got (0-100)
     _done = Signal(int, object, object)
 
     def __init__(self, interval_ms=700):
@@ -111,7 +114,7 @@ class LensScanner(QObject):
         self.ocr_language = lens_ocr.AUTO
         self.translator = None       # lens_translate.LensTranslator
         self.covered = lambda: []    # QRects of the area where a photo shows a translation
-        self.peeking = lambda on: None  # makes the translations invisible (True) and back (False)
+        self.peeking = lambda on: None  # leaves the translations out of photos (True) and back (False)
         self.paused = lambda: False  # True while somebody selects or copies a translation
         self.peek_every = 5.0        # s between looks under the translations; 0: never
         self.trim_edges = False      # leave out words cut by the sides (the lens around the mouse)
@@ -193,9 +196,13 @@ class LensScanner(QObject):
             return  # this photo shows translations: read the next one, taken without them
         if (moving and now - self._changing_since < MAX_WAIT) or self._busy:
             return
-        self._busy = True
-        self._submitted = thumb
         self._changing_since = None
+        self._submit(thumb, image)
+
+    def _submit(self, thumb, image):
+        self._busy = True
+        self.working.emit(True)
+        self._submitted = thumb
         self._jobs.put((self.generation, image, self.target, self.ocr_language, self.translator,
                         self.trim_edges))
 
@@ -222,11 +229,17 @@ class LensScanner(QObject):
             self.peeking(False)
             self._peek_pending = False
         self._last_clean = time.monotonic()
-        if image is not None and not image.isNull() and changed(thumbnail(image), self._submitted):
-            self._mark_changed(self._last_clean)
+        if image is None or image.isNull() or self._busy:
+            return
+        thumb = thumbnail(image)
+        if not changed(thumb, self._previous):
+            return  # the same as a photo with the translations in it: they were not left out after all
+        if changed(thumb, self._submitted):
+            self._submit(thumb, image)  # read it again; the translations stay until the new ones are ready
 
     def _finished(self, generation, blocks, error):
         self._busy = False
+        self.working.emit(False)
         if generation != self.generation or not self.running:
             return
         if error:
@@ -246,7 +259,7 @@ class LensScanner(QObject):
                 if reader is None or language != reader_language:
                     reader, reader_language = lens_ocr.Reader(language), language
                 started = time.monotonic()
-                blocks = self.process(reader, translator, image, target, trim_edges)
+                blocks = self.process(reader, translator, image, target, trim_edges, self.progress.emit)
                 log.debug("Read and translated %d blocks in %.2f s", len(blocks), time.monotonic() - started)
                 self._done.emit(generation, blocks, None)
             except Exception as e:
@@ -254,12 +267,17 @@ class LensScanner(QObject):
                 self._done.emit(generation, [], str(e) or e.__class__.__name__)
 
     @staticmethod
-    def process(reader, translator, image, target, trim_edges=False):
+    def process(reader, translator, image, target, trim_edges=False, report=lambda text, percent: None):
+        report("Reading the screen…", 5)
         lines = reader.read(image)
         blocks = [b for b in lens_ocr.group_blocks(lines)
                   if lens_ocr.worth_translating(b.text) and not lens_translate.already_in(b.text, target)
                   and not (trim_edges and cut_at_edge(b, image.width()))]
-        translations = translator.translate_many([b.text for b in blocks], target)
+        report(f"Translating {len(blocks)} pieces of text…", 30)
+
+        def translated(done, total):
+            report(f"Translating… {done} of {total}", 30 + 70 * done // max(total, 1))
+        translations = translator.translate_many([b.text for b in blocks], target, progress=translated)
         pixels = image_array(image) if blocks else None
         for block, translation in zip(blocks, translations):
             block.translation = translation

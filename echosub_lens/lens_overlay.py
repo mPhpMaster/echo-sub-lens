@@ -116,6 +116,7 @@ class LensOverlay(QWidget):
         self.style = lens_style.merged(style)
         self.interactive = False
         self.capture_hidden = False   # True: left out of screenshots and screen sharing
+        self.peeking = False          # True for a moment while Lens looks at the page underneath
         self.labels = []
         self._blocks, self._target = [], None
         self._scale = 1.0
@@ -169,14 +170,23 @@ class LensOverlay(QWidget):
         """New font, size or colours: what is on the screen is drawn again at once."""
         self.style = lens_style.merged(style)
         if self._blocks:
-            self.show_blocks(self._blocks, self._target)
+            self.show_blocks(self._blocks, self._target, redraw=True)
 
-    def show_blocks(self, blocks, target):
+    def show_blocks(self, blocks, target, redraw=False):
         """Replace what is shown with `blocks` (lens_ocr.Block with .translation set)."""
+        if self.labels and not redraw and target == self._target and self._same(blocks):
+            self._blocks = list(blocks)
+            return  # the same translations in the same places: drawing them again would only flicker
         self._remove_labels()
         self._blocks, self._target = list(blocks), target
         rtl = target in languages.RTL
         self.labels = [self._place(block, rtl) for block in self._blocks if block.translation]
+
+    def _same(self, blocks):
+        def key(items):
+            return [(b.translation, round(b.box.x / 4), round(b.box.y / 4), round(b.box.w / 4), round(b.box.h / 4))
+                    for b in items if b.translation]
+        return key(blocks) == key(self._blocks)
 
     def _place(self, block, rtl):
         style, s = self.style, self._scale
@@ -218,7 +228,7 @@ class LensOverlay(QWidget):
 
     def covered(self):
         """Rectangles (in this window) where a screenshot shows a translation instead of the page."""
-        if self.capture_hidden or not self.isVisible() or self.windowOpacity() == 0.0:
+        if self.capture_hidden or self.peeking or not self.isVisible() or self.windowOpacity() == 0.0:
             return []
         return [label.geometry().translated(-self._margin, -self._margin) for label in self.labels]
 
@@ -232,8 +242,16 @@ class LensOverlay(QWidget):
         self._apply_styles()
 
     def set_peeking(self, peeking):
-        """Fully transparent for a moment, so Lens can see the page under its own translations."""
-        self.setWindowOpacity(0.0 if peeking else 1.0)
+        """Left out of screenshots for a moment, so Lens can see the page under its own translations.
+
+        On the screen nothing changes: the translations stay where they are. (Without Windows' screenshot
+        exclusion they are made invisible for that moment instead.)
+        """
+        self.peeking = bool(peeking)
+        if sys.platform == "win32":
+            self._apply_styles()
+        else:
+            self.setWindowOpacity(0.0 if peeking else 1.0)
 
     # ---- mouse: through to the app, or ours while Ctrl is held ----------------
     def set_interactive(self, interactive):
@@ -257,4 +275,5 @@ class LensOverlay(QWidget):
             style |= WS_EX_TRANSPARENT | WS_EX_NOACTIVATE
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
         # Windows 10 2004 and later can leave a window out of screenshots and screen sharing
-        user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE if self.capture_hidden else WDA_NONE)
+        hidden = self.capture_hidden or self.peeking
+        user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE if hidden else WDA_NONE)

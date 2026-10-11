@@ -7,8 +7,8 @@ import threading
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QGuiApplication, QPixmap
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton,
-                               QScrollArea, QSplitter, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QProgressBar,
+                               QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from . import languages, lens_files, lens_ocr
 
@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 class _Signals(QObject):
     page = Signal(int, object, object)      # index, original QImage, translated blocks
     texts = Signal(object)                  # {original: translation} of a Word or text file
-    progress = Signal(str)
+    progress = Signal(str, int)             # what is being done, and how far it got (0-100)
     failed = Signal(str)
     done = Signal()
 
@@ -42,7 +42,7 @@ class FileWindow(QWidget):
         self.signals = _Signals()
         self.signals.page.connect(self._page_done)
         self.signals.texts.connect(self._texts_done)
-        self.signals.progress.connect(self.status.setText)
+        self.signals.progress.connect(self._progress)
         self.signals.failed.connect(self._failed)
         self.signals.done.connect(self._done)
         threading.Thread(target=self._work, args=(translator, ocr_language), name="lens-file", daemon=True).start()
@@ -53,6 +53,11 @@ class FileWindow(QWidget):
         bar = QHBoxLayout()
         self.status = QLabel("Starting…")
         bar.addWidget(self.status, 1)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setFixedWidth(220)
+        self.progress_bar.setFormat("%p%")
+        bar.addWidget(self.progress_bar)
         self.original_button = QPushButton("Show the original")
         self.original_button.setCheckable(True)
         self.original_button.toggled.connect(self._show_pages)
@@ -108,7 +113,8 @@ class FileWindow(QWidget):
         for index, image in enumerate(lens_files.pages(self.path)):
             if self._cancel.is_set():
                 return
-            self.signals.progress.emit(f"Reading and translating page {index + 1} of {total}…")
+            self.signals.progress.emit(f"Reading and translating page {index + 1} of {total}…",
+                                       100 * index // max(total, 1))
             blocks = lens_files.translate_page(reader, translator, image, self.target)
             self.signals.page.emit(index, image, blocks)
 
@@ -117,7 +123,7 @@ class FileWindow(QWidget):
             texts = lens_files.word_texts(self.path)
         else:
             texts = lens_files.text_lines(lens_files.read_text(self.path))
-        self.signals.progress.emit(f"Translating {len(texts)} paragraphs…")
+        self.signals.progress.emit(f"Translating {len(texts)} paragraphs…", 0)
         translations = {}
         step = 40
         for start in range(0, len(texts), step):
@@ -125,10 +131,16 @@ class FileWindow(QWidget):
                 return
             chunk = texts[start:start + step]
             translations.update(zip(chunk, translator.translate_many(chunk, self.target)))
-            self.signals.progress.emit(f"Translated {min(start + step, len(texts))} of {len(texts)} paragraphs…")
+            done = min(start + step, len(texts))
+            self.signals.progress.emit(f"Translated {done} of {len(texts)} paragraphs…", 100 * done // len(texts))
         self.signals.texts.emit(translations)
 
     # ---- results (Qt thread) ---------------------------------------------------
+    def _progress(self, text, percent):
+        self.status.setText(text)
+        self.progress_bar.setValue(percent)
+        self.progress_bar.show()
+
     def _page_done(self, index, image, blocks):
         self.originals[index], self.blocks[index] = image, blocks
         self.rendered[index] = lens_files.render(image, blocks, self.target, self.style)
@@ -173,9 +185,11 @@ class FileWindow(QWidget):
     def _done(self):
         self.finished = True
         self.save_button.setEnabled(True)
+        self.progress_bar.hide()
         self.status.setText("Done — select text on the right to copy it, or save a translated copy.")
 
     def _failed(self, message):
+        self.progress_bar.hide()
         self.status.setText(f"Could not translate this file: {message}")
 
     def restyle(self, style):
