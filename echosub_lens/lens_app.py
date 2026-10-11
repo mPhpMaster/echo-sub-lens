@@ -17,6 +17,7 @@ LENS_NAME = "EchoSub Lens"
 INSTANCE_KEY = "EchoSub-Lens-single-instance"
 MUTEX_NAME = "EchoSubLensMutex"  # the installer checks it too
 VK_CONTROL = 0x11
+OLD_INTERVAL_MS = 700  # the default before 1.1.0
 
 DEFAULTS = {
     "mode": "screen",            # screen | area | mouse (a lens that follows the pointer)
@@ -32,7 +33,7 @@ DEFAULTS = {
     "capture_visible": True,     # translations show in screenshots and screen sharing (Discord, OBS)
     "peek_seconds": 5,           # how often Lens looks at the page under its translations; 0: never
     "select_mode": False,        # translations take the mouse even without Ctrl
-    "interval_ms": 700,
+    "interval_ms": 400,          # ms between photos while nothing changes (faster while it settles)
     "shortcuts": None,           # {action: key}, see lens_shortcuts.ACTIONS; None = the default keys
     "last_folder": "",           # where "Translate a file" opens
     "text_window": False,        # the translation window (the translated text in a box, above all windows)
@@ -56,6 +57,8 @@ def load_config():
     from .lens_style import merged
 
     cfg["style"] = merged(cfg["style"])
+    if cfg["interval_ms"] == OLD_INTERVAL_MS:  # the old default, saved with every setting: now quicker
+        cfg["interval_ms"] = DEFAULTS["interval_ms"]
     return cfg
 
 

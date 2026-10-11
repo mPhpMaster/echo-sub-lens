@@ -21,7 +21,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage
 
-from . import lens_ocr, lens_translate
+from . import lens_capture, lens_ocr, lens_translate
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +33,76 @@ PEEK_MS = 120            # how long the translations are left out of photos whil
 MIN_VISIBLE = 0.05       # below this share of the area left uncovered, only looking underneath tells
 EDGE = 3                 # px: a block this close to the left or right side may be a word cut in two
 FRAGMENT = 0.2           # ... and if it is narrower than this share of the area, it is left out
+
+
+FAST_MS = 120            # ms between photos while the screen settles: a change is read as soon as it is still
+TYPING_WINDOW = 2.0      # s: text that grew from what was read this recently is still being written out
+TYPING_ROUNDS = 8        # ... but after this many reads in a row it is translated anyway (a growing log)
+
+
+class Unsettled(list):
+    """Translated blocks of a photo in which some text was still being written out (left out for now)."""
+
+
+class TypingWatch:
+    """Remembers what the last read found, to tell text still being written out (a game's dialogue)."""
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._last, self._when, self._rounds = [], 0.0, 0
+
+    def growing(self, blocks):
+        """Texts of `blocks` that are a longer copy of text read a moment ago."""
+        now = self._clock()
+        recent = self._last if now - self._when < TYPING_WINDOW else []
+        found = {b.text for b in blocks
+                 if any(len(p) >= 3 and len(b.text) > len(p) and b.text.startswith(p) for p in recent)}
+        self._rounds = self._rounds + 1 if found else 0
+        if self._rounds > TYPING_ROUNDS:
+            found, self._rounds = set(), 0
+        self._last, self._when = [b.text for b in blocks], now
+        return found
+
+
+def inside(box, rects):
+    """Whether the middle of `box` lies in one of `rects` ((x, y, w, h), photo pixels)."""
+    cx, cy = box.x + box.w / 2, box.y + box.h / 2
+    return any(x <= cx <= x + w and y <= cy <= y + h for x, y, w, h in rects)
+
+
+def _grey(image):
+    small = image.convertToFormat(QImage.Format_Grayscale8)
+    stride = small.bytesPerLine()
+    data = np.frombuffer(bytes(small.constBits()), np.uint8)[: stride * small.height()]
+    return data.reshape(small.height(), stride)[:, : small.width()]
+
+
+def has_contrast(image):
+    """Not a blank or nearly one-colour picture (where a second read would find nothing either)."""
+    return image.width() > 8 and image.height() > 8 and float(np.std(_grey(thumbnail_image(image)))) > 12
+
+
+def thumbnail_image(image):
+    return image.scaled(THUMB[0], THUMB[1], Qt.IgnoreAspectRatio, Qt.FastTransformation)
+
+
+def binarized(image):
+    """Black text on white (Otsu's threshold; light text on a dark background is turned around)."""
+    grey = _grey(image)
+    histogram = np.bincount(grey.ravel(), minlength=256).astype(np.float64)
+    total = grey.size
+    levels = np.arange(256)
+    weight = np.cumsum(histogram)
+    mean = np.cumsum(histogram * levels)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        between = (mean[-1] * weight / total - mean) ** 2 / (weight * (total - weight))
+    threshold = int(np.nanargmax(between))
+    black_white = np.where(grey > threshold, 255, 0).astype(np.uint8)
+    if np.mean(black_white) < 128:  # mostly dark: the text is the light part
+        black_white = 255 - black_white
+    out = QImage(black_white.tobytes(), black_white.shape[1], black_white.shape[0], black_white.shape[1],
+                 QImage.Format_Grayscale8)
+    return out.copy()
 
 
 def thumbnail(image):
@@ -107,7 +177,7 @@ class LensScanner(QObject):
     progress = Signal(str, int)  # what the worker is doing, and how far it got (0-100)
     _done = Signal(int, object, object)
 
-    def __init__(self, interval_ms=700):
+    def __init__(self, interval_ms=400):
         super().__init__()
         self.area = None             # (QScreen, QRect relative to that screen)
         self.target = "ar"
@@ -116,6 +186,11 @@ class LensScanner(QObject):
         self.covered = lambda: []    # QRects of the area where a photo shows a translation
         self.peeking = lambda on: None  # leaves the translations out of photos (True) and back (False)
         self.paused = lambda: False  # True while somebody selects or copies a translation
+        self.blocked = lambda: []    # QRects of the area under Lens's own windows (left alone, not read)
+        self.capturer = lens_capture.Capturer()
+        self.idle_ms = interval_ms   # ms between photos while nothing changes
+        self._reread_due = False
+        self._peek_force = False
         self.peek_every = 5.0        # s between looks under the translations; 0: never
         self.trim_edges = False      # leave out words cut by the sides (the lens around the mouse)
         self.generation = 0
@@ -140,6 +215,7 @@ class LensScanner(QObject):
         return self._timer.isActive()
 
     def set_interval(self, ms):
+        self.idle_ms = ms
         self._timer.setInterval(ms)
 
     def start(self):
@@ -156,6 +232,7 @@ class LensScanner(QObject):
         self.generation += 1
         self._previous = self._submitted = self._last_blocks = None
         self._changing_since = None
+        self._reread_due = False
         if self._showing:
             self._showing = False
             self.stale.emit()
@@ -167,18 +244,27 @@ class LensScanner(QObject):
     # ---- the Qt thread: photograph, compare, hand over ----------------------
     def grab(self):
         screen, rect = self.area
-        return screen.grabWindow(0, rect.x(), rect.y(), rect.width(), rect.height()).toImage()
+        return self.capturer.grab(screen, rect)
 
     def tick(self):
+        self._tick()
+        # Look again soon while the screen is settling, or while the worker waits for a fresh photo
+        fast = self._changing_since is not None or self._reread_due
+        interval = min(FAST_MS, self.idle_ms) if fast else self.idle_ms
+        if self._timer.interval() != interval:
+            self._timer.setInterval(interval)
+
+    def _tick(self):
         if self.area is None or self.translator is None or self._peek_pending or self.paused():
             return
         rect = self.area[1]
-        hidden = thumb_mask(self.covered(), rect.width(), rect.height())
+        covered = self.covered()
+        hidden = thumb_mask(covered + self.blocked(), rect.width(), rect.height())
         image = self.grab()
         if image.isNull():
             return
         now = time.monotonic()
-        if hidden is None:
+        if not covered:
             self._last_clean = now
         thumb = thumbnail(image)
         moving = changed(thumb, self._previous, hidden)
@@ -188,23 +274,35 @@ class LensScanner(QObject):
             if not self._showing and self._last_blocks is not None and not self._busy:
                 self._showing = True  # back to what was translated (a hover or a menu went away)
                 self.result.emit(self._last_blocks)
-            elif hidden is not None and not self._busy and self.peek_due(now):
+            elif self._reread_due and not self._busy:
+                self._reread(covered, thumb, image)
+            elif covered and not self._busy and self.peek_due(now):
                 self._peek()
             return
         self._mark_changed(now)
-        if hidden is not None:
+        if covered:
             return  # this photo shows translations: read the next one, taken without them
         if (moving and now - self._changing_since < MAX_WAIT) or self._busy:
             return
         self._changing_since = None
         self._submit(thumb, image)
 
+    def _reread(self, covered, thumb, image):
+        """Text was still being written out: read the same place again once it has had a moment."""
+        self._reread_due = False
+        if covered:
+            self._peek(force=True)  # a photo without the translations, which stay on the screen
+        else:
+            self._submit(thumb, image)
+
     def _submit(self, thumb, image):
         self._busy = True
         self.working.emit(True)
         self._submitted = thumb
+        scale = self.scale()
+        blocked = [(r.x() * scale, r.y() * scale, r.width() * scale, r.height() * scale) for r in self.blocked()]
         self._jobs.put((self.generation, image, self.target, self.ocr_language, self.translator,
-                        self.trim_edges))
+                        self.trim_edges, blocked))
 
     def _mark_changed(self, now):
         if self._changing_since is None:
@@ -216,9 +314,10 @@ class LensScanner(QObject):
     def peek_due(self, now):
         return bool(self.peek_every) and now - self._last_clean >= self.peek_every
 
-    def _peek(self):
+    def _peek(self, force=False):
         """Hide the translations for a moment and look whether the page under them changed."""
         self._peek_pending = True
+        self._peek_force = force
         self.peeking(True)
         QTimer.singleShot(PEEK_MS, self._peeked)
 
@@ -234,7 +333,7 @@ class LensScanner(QObject):
         thumb = thumbnail(image)
         if not changed(thumb, self._previous):
             return  # the same as a photo with the translations in it: they were not left out after all
-        if changed(thumb, self._submitted):
+        if self._peek_force or changed(thumb, self._submitted):
             self._submit(thumb, image)  # read it again; the translations stay until the new ones are ready
 
     def _finished(self, generation, blocks, error):
@@ -246,6 +345,8 @@ class LensScanner(QObject):
             self._submitted = None  # try again on the next tick
             self.status.emit(error)
             return
+        if isinstance(blocks, Unsettled):
+            self._reread_due = True  # some text was still being written out: look again in a moment
         self._last_blocks = blocks
         self._showing = True
         self.result.emit(blocks)
@@ -253,13 +354,15 @@ class LensScanner(QObject):
     # ---- the worker thread: read and translate -----------------------------
     def _work(self):
         reader, reader_language = None, None
+        typing = TypingWatch()
         while True:
-            generation, image, target, language, translator, trim_edges = self._jobs.get()
+            generation, image, target, language, translator, trim_edges, blocked = self._jobs.get()
             try:
                 if reader is None or language != reader_language:
                     reader, reader_language = lens_ocr.Reader(language), language
                 started = time.monotonic()
-                blocks = self.process(reader, translator, image, target, trim_edges, self.progress.emit)
+                blocks = self.process(reader, translator, image, target, trim_edges, self.progress.emit, blocked,
+                                      typing)
                 log.debug("Read and translated %d blocks in %.2f s", len(blocks), time.monotonic() - started)
                 self._done.emit(generation, blocks, None)
             except Exception as e:
@@ -267,12 +370,19 @@ class LensScanner(QObject):
                 self._done.emit(generation, [], str(e) or e.__class__.__name__)
 
     @staticmethod
-    def process(reader, translator, image, target, trim_edges=False, report=lambda text, percent: None):
+    def process(reader, translator, image, target, trim_edges=False, report=lambda text, percent: None,
+                blocked=(), typing=None):
+        """The translated blocks of `image`; an Unsettled list when some text was still being written out."""
         report("Reading the screen…", 5)
         lines = reader.read(image)
+        if len(lines) < 2 and has_contrast(image):  # little or nothing read: try once more in black and white
+            lines = max(lines, reader.read(binarized(image)), key=len)
         blocks = [b for b in lens_ocr.group_blocks(lines)
                   if lens_ocr.worth_translating(b.text) and not lens_translate.already_in(b.text, target)
-                  and not (trim_edges and cut_at_edge(b, image.width()))]
+                  and not (trim_edges and cut_at_edge(b, image.width())) and not inside(b.box, blocked)]
+        growing = typing.growing(blocks) if typing is not None else set()
+        if growing:
+            blocks = [b for b in blocks if b.text not in growing]
         report(f"Translating {len(blocks)} pieces of text…", 30)
 
         def translated(done, total):
@@ -282,4 +392,5 @@ class LensScanner(QObject):
         for block, translation in zip(blocks, translations):
             block.translation = translation
             block.background, block.foreground = colors_of(pixels, block.box)
-        return [b for b in blocks if b.translation and b.translation.strip() != b.text.strip()]
+        result = [b for b in blocks if b.translation and b.translation.strip() != b.text.strip()]
+        return Unsettled(result) if growing else result

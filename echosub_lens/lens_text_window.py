@@ -2,19 +2,16 @@
 # Copyright (C) 2026 Mohammad Al-Safadi
 """EchoSub Lens: the translation window — a small window above all others with the translated text in a box.
 
-It shows what Lens translated from the screen, in reading order, ready to read, select and copy. It is
-left out of screenshots, so Lens never reads its own text back even when it lies over the area it reads.
+It shows what Lens translated from the screen, in reading order, ready to read, select and copy. It shows
+in screenshots like any window; Lens leaves the part of the screen under it alone, so it never reads its
+own text back.
 """
-import ctypes
-import sys
-
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
 from . import languages
 
-WDA_EXCLUDEFROMCAPTURE = 0x11
 MIN_FONT_PT, MAX_FONT_PT = 8, 40
 
 
@@ -58,9 +55,10 @@ class TextWindow(QWidget):
         self.with_original = QCheckBox("Original text too")
         self.with_original.setChecked(bool(settings.get("with_original", False)))
         self.with_original.toggled.connect(lambda _: (self._fill(), self._changed()))
-        self.overlay = QCheckBox("Translations over the screen too")
-        self.overlay.setChecked(overlay_visible)
-        self.overlay.toggled.connect(lambda _: self._changed())
+        self.only_here = QCheckBox("Show translations only in this window")
+        self.only_here.setToolTip("Not over the text on the screen. Closing this window puts them back there.")
+        self.only_here.setChecked(not overlay_visible)
+        self.only_here.toggled.connect(lambda _: self._changed())
         smaller, bigger = QPushButton("A−"), QPushButton("A+")
         for button in (smaller, bigger):
             button.setFixedWidth(36)
@@ -68,7 +66,7 @@ class TextWindow(QWidget):
         bigger.clicked.connect(lambda: self.set_font_pt(self.font_pt + 2))
         copy = QPushButton("Copy")
         copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.box.toPlainText()))
-        for widget in (self.with_original, self.overlay):
+        for widget in (self.only_here, self.with_original):
             bar.addWidget(widget)
         bar.addStretch(1)
         for widget in (smaller, bigger, copy):
@@ -110,17 +108,12 @@ class TextWindow(QWidget):
     def settings(self):
         g = self.geometry()
         return {"geometry": [g.x(), g.y(), g.width(), g.height()], "font_pt": self.font_pt,
-                "with_original": self.with_original.isChecked(), "overlay": self.overlay.isChecked()}
+                "with_original": self.with_original.isChecked(), "overlay": not self.only_here.isChecked()}
 
     def _changed(self):
         self.changed.emit(self.settings())
 
     # ---- window ----------------------------------------------------------------------
-    def showEvent(self, event):
-        super().showEvent(event)
-        if sys.platform == "win32":
-            ctypes.windll.user32.SetWindowDisplayAffinity(int(self.winId()), WDA_EXCLUDEFROMCAPTURE)
-
     def moveEvent(self, event):
         super().moveEvent(event)
         if self.isVisible():

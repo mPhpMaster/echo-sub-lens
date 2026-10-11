@@ -1,10 +1,13 @@
 # EchoSub Lens runtime dependencies (Python 3.10, Windows 10 2004+ / 11, x64). Versions pinned to the tested set.
 PySide6==6.11.2
 numpy==2.2.6
+# Fast screen capture (DirectX Desktop Duplication); GDI is used when it is not available
+dxcam==0.3.0
 # Translation: NLLB-200 offline (CTranslate2) or Google Translate
 ctranslate2==4.8.2
 sentencepiece==0.2.2
 deep-translator==1.11.4
+rapidfuzz==3.14.5            # text read a little differently keeps its translation
 huggingface_hub==1.31.0
 requests==2.34.2
 # Windows' own text recognition (OCR) through WinRT

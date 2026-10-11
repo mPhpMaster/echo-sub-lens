@@ -20,7 +20,8 @@ binaries = collect_dynamic_libs("ctranslate2")
 
 hiddenimports = (
     collect_submodules("winrt")  # Windows OCR
-    + ["sentencepiece", "deep_translator", "PySide6.QtPdf", "PySide6.QtNetwork"]
+    + collect_submodules("dxcam")  # DirectX screen capture
+    + ["sentencepiece", "deep_translator", "PySide6.QtPdf", "PySide6.QtNetwork", "rapidfuzz"]
 )
 
 a = Analysis(

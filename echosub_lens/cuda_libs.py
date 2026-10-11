@@ -39,11 +39,39 @@ def folder():
     return os.path.join(config.MODELS_DIR, "cuda")
 
 
+# EchoSub's installer (its AppId): its folder may hold NVIDIA's libraries, which Lens then uses rather than download
+ECHOSUB_UNINSTALL_KEY = (r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+                         r"\{6F1E3C2A-9B7D-4E58-A1C4-3D2B8E7F5A91}_is1")
+
+
+def echosub_install_dirs():
+    """The folders of the installed EchoSub app (and its _internal folder, where a build keeps its files)."""
+    found = []
+    if sys.platform == "win32":
+        import winreg
+
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(hive, ECHOSUB_UNINSTALL_KEY) as key:
+                    found.append(winreg.QueryValueEx(key, "InstallLocation")[0])
+            except OSError:
+                continue
+    found += [os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "EchoSub"),
+              os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "EchoSub")]
+    dirs = []
+    for d in found:
+        for root in (os.path.normpath(d), os.path.join(os.path.normpath(d), "_internal")):
+            if os.path.isdir(root) and root not in dirs:
+                dirs.append(root)
+    return dirs
+
+
 def search_roots():
-    """Where the libraries may already be: the downloaded folder, the app itself, or Python's packages."""
+    """Where the libraries may already be: the downloaded folder, the app itself, EchoSub, or Python's packages."""
     roots = [folder()]
     if getattr(sys, "frozen", False):
         roots.append(getattr(sys, "_MEIPASS", os.path.dirname(sys.executable)))  # older, bundled builds
+    roots += echosub_install_dirs()
     roots += site.getsitepackages() + [os.path.join(sys.prefix, "Lib", "site-packages")]
     return roots
 

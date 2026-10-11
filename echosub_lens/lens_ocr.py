@@ -123,10 +123,23 @@ def group_blocks(lines):
     return blocks
 
 
+def _ideographic(ch):
+    """Chinese, Japanese and Korean characters: Windows reads each one as a word of its own."""
+    return 0x2E80 <= ord(ch) <= 0x9FFF or 0xAC00 <= ord(ch) <= 0xD7AF or 0xF900 <= ord(ch) <= 0xFAFF
+
+
 def worth_translating(text):
-    """Skip numbers, prices, times and single symbols: they read the same in every language."""
-    letters = sum(1 for ch in text if ch.isalpha())
-    return letters >= 2
+    """Skip numbers, prices, times and single symbols (they read the same in every language), and what
+    Windows "read" in a picture, an icon or a pattern: mostly symbols, or a row of stray single letters."""
+    chars = [ch for ch in text if not ch.isspace()]
+    letters = sum(1 for ch in chars if ch.isalpha())
+    if letters < 2 or letters < 0.45 * len(chars):
+        return False
+    if any(_ideographic(ch) for ch in chars):
+        return True
+    words = text.split()
+    singles = sum(1 for w in words if len(w) == 1 and w not in ("a", "A", "I", "y", "o", "e", "&"))
+    return not (len(words) >= 3 and singles > 0.6 * len(words))
 
 
 class Reader:

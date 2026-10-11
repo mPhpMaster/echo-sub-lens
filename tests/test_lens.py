@@ -517,7 +517,7 @@ class TextWindowTest(unittest.TestCase):
             lens._show([Block([line("Delete account", 100, 50)], translation="حذف الحساب")])
             self.assertEqual(window.box.toPlainText(), "حذف الحساب")
             self.assertEqual(len(lens.overlay.labels), 1)
-            window.overlay.setChecked(False)  # only in the window
+            window.only_here.setChecked(True)  # only in the window
             self.assertFalse(saved[-1]["overlay_visible"])
             self.assertEqual(lens.overlay.labels, [])
             lens._show([Block([line("Save", 100, 50)], translation="حفظ")])

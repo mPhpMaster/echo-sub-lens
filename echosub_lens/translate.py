@@ -12,6 +12,7 @@ from . import config, languages
 log = logging.getLogger(__name__)
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?。！？؟])\s+")
+JSON_URL = "https://translate.googleapis.com/translate_a/single"  # Google Translate's own JSON service
 
 
 class NoTranslator:
@@ -108,6 +109,8 @@ class GoogleTranslator:
         self._cls = _GT
         self._too_many = TooManyRequests
         self._cache = {}
+        self._session = None
+        self._web_only = False
         self._lock = threading.Lock()
         self._last_request = 0.0
         self._paused_until = 0.0
@@ -145,10 +148,36 @@ class GoogleTranslator:
                 self._fallback_spec = None
         return self._fallback
 
-    def _google(self, text, tgt):
-        key = languages.google_code(tgt)
+    def _ask(self, text, key):
+        """One request: Google's JSON service (one kept-open connection, about 0.2 s), or, when that fails
+        for another reason than too many requests, the translate.google.com page through deep-translator."""
+        if not self._web_only:
+            try:
+                return self._ask_json(text, key)
+            except self._too_many:
+                raise
+            except Exception as e:
+                log.warning("Google's translation service failed (%s); using the web page instead", e)
+                self._web_only = True
         if key not in self._cache:
             self._cache[key] = self._cls(source="auto", target=key)
+        return self._cache[key].translate(text)
+
+    def _ask_json(self, text, key):
+        if self._session is None:
+            import requests
+
+            self._session = requests.Session()
+            self._session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        r = self._session.post(JSON_URL, params={"client": "gtx", "sl": "auto", "tl": key, "dt": "t"},
+                               data={"q": text}, timeout=10)
+        if r.status_code == 429:
+            raise self._too_many()
+        r.raise_for_status()
+        return "".join(part[0] for part in r.json()[0] if part and part[0])
+
+    def _google(self, text, tgt):
+        key = languages.google_code(tgt)
         with self._lock:
             now = time.monotonic()
             if now < self._paused_until:
@@ -158,7 +187,7 @@ class GoogleTranslator:
                 time.sleep(max(delay, self._last_request + self.MIN_INTERVAL - time.monotonic(), 0.0))
                 self._last_request = time.monotonic()
                 try:
-                    result = self._cache[key].translate(text) or text
+                    result = self._ask(text, key) or text
                 except self._too_many:
                     continue
                 self._cooldown = self.COOLDOWN[0]

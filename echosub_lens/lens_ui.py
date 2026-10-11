@@ -63,6 +63,7 @@ class LensApp(LensMenuMixin):
         self.scanner.covered = self.overlay.covered
         self.scanner.peeking = self.overlay.set_peeking
         self.scanner.paused = lambda: ctrl_held() or self.overlay.engaged()
+        self.scanner.blocked = self._under_own_windows
         self.scanner.peek_every = cfg["peek_seconds"]
         self.scanner.result.connect(self._show)
         self.scanner.stale.connect(self.overlay.clear)
@@ -395,6 +396,16 @@ class LensApp(LensMenuMixin):
         self.act_text_window.setChecked(on)
         self.act_text_window.blockSignals(False)
 
+    def _under_own_windows(self):
+        """Where the translation window lies over the area Lens reads (relative to it): left alone, not read."""
+        window = self.text_window
+        if window is None or not window.isVisible() or window.isMinimized() or self.scanner.area is None:
+            return []
+        screen, rect = self.scanner.area
+        area = rect.translated(screen.geometry().topLeft())
+        part = window.frameGeometry().intersected(area)
+        return [] if part.isEmpty() else [part.translated(-area.topLeft())]
+
     def _text_window_changed(self, settings):
         if settings["overlay"] != self.cfg["overlay_visible"]:
             self._set(overlay_visible=settings["overlay"])
@@ -479,6 +490,7 @@ class LensApp(LensMenuMixin):
 
     def quit(self):
         self.scanner.stop()
+        self.scanner.capturer.close()
         self.hotkeys.disable()
         self.busy.clear()
         if self.text_window is not None:
