@@ -17,7 +17,7 @@ os.environ.setdefault("ECHOSUB_LENS_DATA_DIR", os.path.join(os.path.dirname(os.p
 import numpy as np  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from echosub_lens import lens_app, lens_ocr, lens_shortcuts, lens_ui, movie  # noqa: E402
+from echosub_lens import lens_app, lens_movie_window, lens_ocr, lens_shortcuts, lens_ui, movie  # noqa: E402
 from echosub_lens.movie import Cue  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
@@ -86,6 +86,91 @@ class SrtTest(unittest.TestCase):
         self.assertEqual(movie.output_path(os.path.join("D:", "films", "Film.mkv"), "en"),
                          os.path.join("D:", "films", "Film.en.srt"))
         self.assertTrue(movie.output_path("Film.mp4").endswith("Film.text.srt"))
+
+
+class FakeTranslator:
+    """A translator stand-in: capitals, and the dash dropped the way real translators often drop it."""
+
+    def __init__(self, key="google"):
+        self.key = key
+        self.calls = []
+        self.released = False
+
+    def translate_many(self, texts, target, progress=None):
+        self.calls.append((list(texts), target))
+        return [text.lstrip("- ").upper() for text in texts]
+
+    def release(self):
+        self.released = True
+
+
+class TranslateCuesTest(unittest.TestCase):
+    def test_lines_dialogues_and_repeats(self):
+        cues = [Cue(0, 1, "Hello there my\ngood old friend"), Cue(1, 2, "- Where to?\n- Home."),
+                Cue(2, 3, "Hello there my\ngood old friend"), Cue(3, 4, "One line")]
+        translator, steps = FakeTranslator(), []
+        out = movie.translate_cues(cues, translator, "fr", lambda f, t: steps.append((f, t)), batch=2)
+        self.assertEqual([(c.start, c.end) for c in out], [(c.start, c.end) for c in cues])
+        self.assertEqual(out[0].text.split("\n"), ["HELLO THERE MY", "GOOD OLD FRIEND"])  # two lines stay two
+        self.assertEqual(out[1].text, "- WHERE TO?\n- HOME.")   # each speaker: own line, own dash
+        self.assertEqual(out[3].text, "ONE LINE")
+        sent = [t for texts, _ in translator.calls for t in texts]
+        self.assertEqual(sent, ["Hello there my good old friend", "- Where to?", "- Home.", "One line"])
+        self.assertEqual({target for _, target in translator.calls}, {"fr"})
+        self.assertEqual(steps[0], (0.0, "Translating 0 of 4 subtitles…"))
+        self.assertEqual(steps[1][1], "Translating 2 of 4 subtitles…")
+        self.assertLess(steps[-1][0], 1.0)
+
+    def test_cancel(self):
+        calls = []
+        with self.assertRaises(movie.Canceled):
+            movie.translate_cues([Cue(0, 1, "a"), Cue(1, 2, "b")], FakeTranslator(), "ar",
+                                 should_cancel=lambda: bool(calls.append(1)) or len(calls) > 1, batch=1)
+
+    def test_translated_names_never_take_the_original_name(self):
+        join = os.path.join
+        self.assertEqual(movie.translated_path(join("D:", "Film.mkv"), "ar"), join("D:", "Film.ar.srt"))
+        self.assertEqual(movie.translated_path(join("D:", "Film.en.srt"), "ar"), join("D:", "Film.ar.srt"))
+        self.assertEqual(movie.translated_path(join("D:", "Film.text.srt"), "fr"), join("D:", "Film.fr.srt"))
+        self.assertEqual(movie.translated_path(join("D:", "x.srt"), "ar"), join("D:", "x.ar.srt"))
+        self.assertEqual(movie.translated_path(join("D:", "Film.2020.srt"), "ar"), join("D:", "Film.2020.ar.srt"))
+        self.assertEqual(movie.translated_path(join("D:", "Film.ar.srt"), "ar"), join("D:", "Film.ar.srt"))
+
+    def test_an_srt_file_translated_keeps_numbers_and_times(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        path, out = os.path.join(folder, "Film.en.srt"), os.path.join(folder, "Film.ar.srt")
+        movie.write_srt([Cue(1, 2.5, "- Hi.\n- Hello."), Cue(3, 4, "Bye")], path)
+        self.assertEqual(movie.read_srt(path), [Cue(1, 2.5, "- Hi.\n- Hello."), Cue(3, 4, "Bye")])
+        self.assertEqual(movie.translate_srt(path, out, FakeTranslator(), "ar"), 2)
+        with open(out, encoding="utf-8-sig") as f:
+            self.assertEqual(f.read(), "1\n00:00:01,000 --> 00:00:02,500\n- HI.\n- HELLO.\n\n"
+                                       "2\n00:00:03,000 --> 00:00:04,000\nBYE\n")
+
+    def test_command_line_translates_after_writing(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        film, out = os.path.join(folder, "Film.mkv"), os.path.join(folder, "x.srt")
+        made = []
+
+        def extract(path, index, out_path):
+            movie.write_srt([Cue(0, 1, "Hi")], out_path)
+            return movie.Result(out_path, 1, language="en")
+
+        def translator(key, device):
+            made.append(FakeTranslator(key))
+            return made[-1]
+
+        with mock.patch.object(movie, "extract_track", side_effect=extract), \
+                mock.patch("echosub_lens.lens_translate.LensTranslator", side_effect=translator), \
+                mock.patch("echosub_lens.config.load", return_value={"translator": "google"}):
+            code = movie.cli([film, "--from", "inside:2", "--out", out, "--to", "ar", "--translator", "google"])
+        self.assertEqual(code, 0)
+        self.assertEqual(made[0].key, "google")
+        self.assertTrue(made[0].released)
+        self.assertEqual(movie.read_srt(os.path.join(folder, "x.ar.srt")), [Cue(0, 1, "HI")])
+        with open(out + ".log", encoding="utf-8") as f:
+            self.assertIn("translated into Arabic with Google", f.read())
 
 
 class CleaningTest(unittest.TestCase):
@@ -305,6 +390,12 @@ class MovieWindowTest(unittest.TestCase):
         self.lens = lens_ui.LensApp(app, dict(lens_app.DEFAULTS), lambda cfg: None,
                                     base_cfg={"target_lang": "ar", "translator": "google"})
         self.lens.activity.tell = self.notes.append
+        self.translator = FakeTranslator()
+        for name, fake in (("translator_for", mock.Mock(return_value=self.translator)),
+                           ("release_translator", mock.Mock())):
+            p = mock.patch.object(self.lens, name, fake)
+            p.start()
+            self.addCleanup(p.stop)
         self.addCleanup(self._close)
         self.film = os.path.join(self.folder, "Film.mkv")
         open(self.film, "wb").close()
@@ -364,9 +455,86 @@ class MovieWindowTest(unittest.TestCase):
         self.assertIn("1 subtitles saved", window.status.text())
         self.assertIn("Movie subtitles saved: Film.ar.srt (1 subtitles)", self.notes)
         self.assertEqual(self.lens.cfg["last_folder"], self.folder)
+        self.assertIn("Not translated: they are already in Arabic", window.status.text())  # Arabic into Arabic
+        self.lens.translator_for.assert_not_called()
+        self.assertTrue(window.open_translated_button.isHidden())
         with mock.patch.object(self.lens, "open_file") as open_file:
             window.translate_button.click()
-        open_file.assert_called_once_with(os.path.join(self.folder, "Film.ar.srt"))
+        open_file.assert_called_once_with(os.path.join(self.folder, "Film.ar.srt"), "ar", "same")
+
+    def test_translated_as_soon_as_written_into_any_language_with_any_translator(self):
+        tracks = [movie.Track(2, "eng", "", "subrip", True)]
+
+        def extract(path, index, out, progress, cancel, ocr_language):
+            movie.write_srt([Cue(0, 1, "Hello there my\ngood old friend"), Cue(2, 3, "- Where to?\n- Home.")], out)
+            return movie.Result(out, 2, language="en")
+
+        with mock.patch.object(movie, "subtitle_tracks", return_value=tracks), \
+                mock.patch.object(movie, "extract_track", side_effect=extract):
+            window = self.lens.open_movie(self.film)
+            self.assertEqual(window.target(), "ar")       # the language Lens translates into now
+            self.assertEqual(window.translator_key(), "same")
+            self.assertTrue(window.translate_after.isChecked())
+            window.target_box.setCurrentIndex(window.target_box.findData("fr"))
+            window.translator_box.setCurrentIndex(window.translator_box.findData("nllb-600m"))
+            hint = window.translator_box.itemData(window.translator_box.currentIndex(),
+                                                  lens_movie_window.Qt.ToolTipRole)
+            self.assertIn("offline", hint)
+            self.assertTrue(window.start())
+            self.assertFalse(window.target_box.isEnabled())
+            self.wait_done(window)
+        self.lens.translator_for.assert_called_once_with("nllb-600m")
+        self.lens.release_translator.assert_called_once_with(self.translator)
+        translated = os.path.join(self.folder, "Film.fr.srt")
+        self.assertEqual(window.translated, translated)
+        self.assertEqual(movie.read_srt(translated), [Cue(0, 1, "HELLO THERE MY\nGOOD OLD FRIEND"),
+                                                      Cue(2, 3, "- WHERE TO?\n- HOME.")])
+        self.assertTrue(os.path.exists(os.path.join(self.folder, "Film.en.srt")))  # the original stays
+        self.assertIn("Translated subtitles saved: Film.fr.srt", self.notes)
+        self.assertIn("Translated into French", window.status.text())
+        self.assertFalse(window.open_translated_button.isHidden())
+        with mock.patch.object(lens_movie_window.QDesktopServices, "openUrl") as open_url:
+            window.open_translated_button.click()
+        self.assertEqual(open_url.call_args[0][0].toLocalFile(), translated.replace("\\", "/"))
+        with mock.patch.object(self.lens, "open_file") as open_file:
+            window.translate_button.click()
+        open_file.assert_called_once_with(os.path.join(self.folder, "Film.en.srt"), "fr", "nllb-600m")
+
+    def test_a_translation_already_there_is_replaced_only_when_asked(self):
+        tracks = [movie.Track(2, "eng", "", "subrip", True)]
+        open(os.path.join(self.folder, "Film.ar.srt"), "w").close()
+        with mock.patch.object(movie, "subtitle_tracks", return_value=tracks), \
+                mock.patch.object(lens_movie_window.QMessageBox, "question",
+                                  return_value=lens_movie_window.QMessageBox.No) as question, \
+                mock.patch.object(movie, "extract_track") as extract:
+            window = self.lens.open_movie(self.film)
+            self.assertFalse(window.start())
+        self.assertIn("Film.ar.srt already exists", question.call_args[0][2])
+        extract.assert_not_called()
+        window.translate_after.setChecked(False)  # not translating: the file there does not matter
+        with mock.patch.object(movie, "extract_track", side_effect=movie.Unsupported("empty")):
+            self.assertTrue(window.start())
+            self.wait_done(window)
+        self.lens.translator_for.assert_not_called()
+
+    def test_a_failed_translation_keeps_the_subtitles(self):
+        tracks = [movie.Track(2, "eng", "", "subrip", True)]
+
+        def extract(path, index, out, progress, cancel, ocr_language):
+            movie.write_srt([Cue(0, 1, "Hi")], out)
+            return movie.Result(out, 1, language="en")
+
+        self.translator.translate_many = mock.Mock(side_effect=RuntimeError("no internet"))
+        with mock.patch.object(movie, "subtitle_tracks", return_value=tracks), \
+                mock.patch.object(movie, "extract_track", side_effect=extract), \
+                self.assertLogs("echosub_lens.lens_movie_window", "ERROR"):
+            window = self.lens.open_movie(self.film)
+            window.start()
+            self.wait_done(window)
+        self.assertIn("Translating them failed: no internet", window.status.text())
+        self.assertFalse(window.done_row.isHidden())
+        self.assertEqual(window.translated, "")
+        self.lens.release_translator.assert_called_once_with(self.translator)
 
     def test_no_subtitles_inside_means_speech_with_its_choices(self):
         with mock.patch.object(movie, "subtitle_tracks", return_value=[]):

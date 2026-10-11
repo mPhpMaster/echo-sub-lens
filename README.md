@@ -58,8 +58,11 @@ The pictures are made by `scripts\screenshots.py`.
   **subtitles inside the movie** (text tracks as they are; Blu-ray and DVD picture subtitles read with Windows'
   text recognition), from **what is said** (speech recognition with Whisper, on your NVIDIA graphics card or the
   processor, any language), or from **text burned into the picture** (read twice a second). A progress bar shows
-  what it does and the time left; then *Translate the subtitles…* opens the file translator, which saves a
-  translated copy with the numbers and times kept.
+  what it does and the time left. **Translate them into any language, with any translator** (Google online, or
+  NLLB offline on your graphics card): with *Translate them as soon as they are written* on, a second file
+  (`Movie.ar.srt`) is saved next to the first — numbers and times kept, a two-line subtitle still two lines, each
+  speaker of a dialogue on a line of their own with their dash. *Translate the subtitles…* opens them in the file
+  translator, in the language and with the translator chosen.
 
 **The translated text in a window of its own**
 - **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —
@@ -137,11 +140,15 @@ The subtitles of a movie without opening a window — for a batch of movies, or 
 
 ```bat
 "D:\Programs\EchoSub Lens\EchoSubLens.exe" --movie-to-srt "Movie.mkv" --from speech --language en
+"D:\Programs\EchoSub Lens\EchoSubLens.exe" --movie-to-srt "Movie.mkv" --to ar --translator google
 ```
 
 `--from` is `inside` (the movie's own text subtitles; `inside:N` for stream N), `speech` (speech recognition) or
 `burned` (text in the picture); without it Lens uses the subtitles inside the movie when there are some, else the
 speech. `--out` names the .srt file (default: next to the movie); a `.log` next to it says how it went.
+`--to LANG` translates the subtitles too, into `Movie.LANG.srt` next to them (subtitles already in that language
+are left as they are); `--translator` is `google`, `nllb-600m` or `nllb-1.3b` (offline, on the graphics card when
+there is one), or `same` — the default: the translator Lens uses.
 
 ## Build the installer
 

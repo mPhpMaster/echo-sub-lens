@@ -106,6 +106,7 @@ class Result:
     path: str
     cues: int
     note: str = ""      # e.g. "on the graphics card", "language: English"
+    language: str = ""  # the language the subtitles are in, when it is known ("en")
 
 
 def _nothing(*_):
@@ -154,6 +155,103 @@ def output_path(movie, language=""):
     """D:/films/Movie.mkv -> D:/films/Movie.en.srt (or Movie.text.srt when the language is not known)."""
     stem = os.path.splitext(movie)[0]
     return f"{stem}.{language or 'text'}.srt"
+
+
+SRT_TIME = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)")
+
+
+def _seconds(h, m, s, ms):
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms.ljust(3, "0")[:3]) / 1000
+
+
+def read_srt(path):
+    """The cues of an SRT file (any encoding the file translator reads), in the file's order."""
+    from .lens_files import read_text
+
+    cues = []
+    for block in re.split(r"\n\s*\n", read_text(path).replace("\r\n", "\n").replace("\r", "\n")):
+        lines = block.strip("\n").split("\n")
+        for i, line in enumerate(lines[:2]):
+            match = SRT_TIME.search(line)
+            if match:
+                g = match.groups()
+                text = "\n".join(lines[i + 1:]).strip()
+                cues.append(Cue(_seconds(*g[:4]), _seconds(*g[4:]), text))
+                break
+    return cues
+
+
+def translated_path(path, target):
+    """Where the translation goes: Movie.mkv or Movie.en.srt -> Movie.ar.srt; subs.srt -> subs.ar.srt.
+    The same path back means the subtitles are already in that language."""
+    from . import languages
+
+    stem, ext = os.path.splitext(path)
+    if ext.lower() == ".srt":
+        base, last = os.path.splitext(stem)
+        tag = last[1:].lower()
+        if base and (tag == "text" or tag in languages.LANGUAGES or tag.split("-")[0] in LANGUAGE_TAGS.values()):
+            stem = base
+    return f"{stem}.{target}.srt"
+
+
+TRANSLATE_BATCH = 40   # cues sent to the translator at once: big enough to be fast, small enough to show progress
+
+
+def _dialogue(lines):
+    """Lines of a dialogue ("- Where to?" / "- Home."): each speaker keeps its own line and dash."""
+    return len(lines) > 1 and any(lens_ocr.spoken_line(line) for line in lines)
+
+
+def _pieces(text):
+    """What is sent to the translator for one cue: its lines as one sentence, or a dialogue line by line."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    if _dialogue(lines):
+        return lines
+    return [" ".join(lines)]
+
+
+def _rebuilt(text, done):
+    from .lens_overlay import split_like
+    from .lens_scanner import keep_dash
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return text
+    if _dialogue(lines):
+        return "\n".join(keep_dash(line, done.get(line) or line) for line in lines)
+    translation = (done.get(" ".join(lines)) or " ".join(lines)).strip()
+    return split_like(translation, len(lines)) if len(lines) > 1 else translation
+
+
+def translate_cues(cues, translator, target, progress=None, should_cancel=None, batch=TRANSLATE_BATCH):
+    """The cues translated into `target` with `translator` (anything with translate_many(texts, target)),
+    their times kept. A cue of two lines stays two lines; a dialogue keeps a line and a dash per speaker.
+    The same text is translated once. progress(fraction, text) hears how far it is."""
+    progress, should_cancel = progress or _nothing, should_cancel or _never
+    texts = list(dict.fromkeys(piece for cue in cues for piece in _pieces(cue.text)))
+    done = {}
+    total = len(cues)
+    progress(0.0, f"Translating 0 of {total} subtitles…")
+    for start in range(0, len(texts), batch):
+        if should_cancel():
+            raise Canceled()
+        chunk = texts[start:start + batch]
+        done.update(zip(chunk, translator.translate_many(chunk, target)))
+        share = len(done) / len(texts)
+        progress(min(share, 0.99), f"Translating {int(round(total * share))} of {total} subtitles…")
+    if should_cancel():
+        raise Canceled()
+    return [Cue(cue.start, cue.end, _rebuilt(cue.text, done)) for cue in cues]
+
+
+def translate_srt(path, out_path, translator, target, progress=None, should_cancel=None):
+    """Translates an SRT file into another one (numbers and times kept). Returns how many cues it holds."""
+    cues = translate_cues(read_srt(path), translator, target, progress, should_cancel)
+    (progress or _nothing)(1.0, "Saving the translated subtitles…")
+    return write_srt(cues, out_path)
 
 
 # ---- cleaning and shaping text -----------------------------------------------------------
@@ -317,6 +415,8 @@ def extract_track(path, stream_index, out_path, progress=None, should_cancel=Non
         if stream is None or stream.type != "subtitle":
             raise Unsupported(f"The movie has no subtitle track #{stream_index}")
         codec = stream.codec_context.name if stream.codec_context is not None else ""
+        tag = (stream.language or (stream.metadata or {}).get("language", "") or "").lower()
+        language = "" if tag in ("", "und") else LANGUAGE_TAGS.get(tag, tag)
         bitmap = codec in BITMAP_CODECS
         if codec not in TEXT_CODECS and not bitmap:
             raise Unsupported(f"Lens cannot read this kind of subtitles ({codec or 'unknown'})")
@@ -331,7 +431,7 @@ def extract_track(path, stream_index, out_path, progress=None, should_cancel=Non
     if not cues:
         raise Unsupported("This subtitle track is empty")
     progress(1.0, "Saving the subtitles…")
-    return Result(out_path, write_srt(cues, out_path))
+    return Result(out_path, write_srt(cues, out_path), language=language)
 
 
 def _make_reader(language):
@@ -528,7 +628,7 @@ def transcribe(path, out_path, model=DEFAULT_MODEL, language=None, device="cuda"
     where = "on the graphics card" if used == "cuda" else "on the processor"
     spoken = getattr(info, "language", "") or language or ""
     note = f"{where}, {languages.name(spoken)}" if spoken else where
-    return Result(out_path, write_srt(cues, out_path), note)
+    return Result(out_path, write_srt(cues, out_path), note, spoken)
 
 
 def _download_progress(event, progress):
@@ -712,12 +812,15 @@ def read_burned(path, out_path, language=lens_ocr.AUTO, every=0.5, region="botto
 
 
 def cli(args):
-    """`EchoSubLens.exe --movie-to-srt MOVIE [--from inside|inside:N|speech|burned] [--out FILE] [--language L]`:
-    the subtitles of a movie without opening a window (a batch of movies, or a check that it all works).
+    """`EchoSubLens.exe --movie-to-srt MOVIE [--from inside|inside:N|speech|burned] [--out FILE] [--language L]
+    [--to LANG [--translator KEY]]`: the subtitles of a movie without opening a window (a batch of movies, or a
+    check that it all works); with `--to`, translated too, into MOVIE.LANG.srt next to them.
     Returns the exit code; what happened is written to Lens's log and to `--out`.log next to the file."""
     import argparse
 
     from PySide6.QtGui import QGuiApplication
+
+    from . import lens_translate
 
     parser = argparse.ArgumentParser(prog="EchoSubLens.exe --movie-to-srt")
     parser.add_argument("movie")
@@ -725,6 +828,9 @@ def cli(args):
     parser.add_argument("--out", default="")
     parser.add_argument("--language", default="")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--to", default="", help="translate the subtitles into this language too (ar, fr…)")
+    parser.add_argument("--translator", default="", choices=list(lens_translate.CHOICES),
+                        help="who translates (default: the one Lens uses)")
     options = parser.parse_args(args)
     app = QGuiApplication.instance() or QGuiApplication(["EchoSubLens"])  # text recognition works on Qt images
     source = options.source
@@ -751,8 +857,45 @@ def cli(args):
         del app
     report = f"{result.cues} subtitles in {time.monotonic() - started:.1f} s ({source}) {result.note}".strip()
     log.info("Movie to subtitles: %s -> %s", report, result.path)
+    code = 0
+    if options.to:
+        try:
+            report += "; " + _cli_translate(result, options.to, options.translator)
+        except Exception as e:
+            log.exception("Translating the movie subtitles failed")
+            report += f"; translating failed: {e}"
+            code = 1
     _cli_report(out, report)
-    return 0
+    return code
+
+
+def _cli_translate(result, target, choice):
+    """`--to`: the subtitles just written, translated into `target`. Returns what happened, in words."""
+    from . import config, cuda_libs, languages, lens_app, lens_translate
+
+    out = translated_path(result.path, target)
+    if result.language == target or os.path.abspath(out) == os.path.abspath(result.path):
+        return f"already in {languages.name(target)}, not translated"
+    base_cfg = config.load()
+    key = lens_translate.resolve(choice or lens_app.load_config().get("translator", lens_translate.SAME), base_cfg)
+    device = "cpu"
+    if key != "google" and base_cfg.get("device", "cuda") != "cpu":
+        cuda_libs.make_visible()
+        device = "cuda" if cuda_libs.available() else "cpu"
+    translator = lens_translate.LensTranslator(key, device)
+    started = time.monotonic()
+    try:
+        count = translate_srt(result.path, out, translator, target)
+        # NLLB uses the processor when the graphics card cannot run it
+        device = getattr(getattr(translator, "_backend", None), "device", device)
+    finally:
+        translator.release()
+    backend = lens_translate.CHOICES.get(key, key).split(" — ")[0]
+    where = "online" if key == "google" else ("on the graphics card" if device == "cuda" else "on the processor")
+    text = (f"translated into {languages.name(target)} with {backend} ({where}): "
+            f"{count} subtitles in {time.monotonic() - started:.1f} s -> {out}")
+    log.info("Movie subtitles %s", text)
+    return text
 
 
 def _cli_report(out, text):

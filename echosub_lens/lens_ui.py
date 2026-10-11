@@ -166,15 +166,34 @@ class LensApp(LensMenuMixin):
         for other in [k for k in self._translators if k != key]:
             self._switch_off(other, self._translators.pop(other))  # one translator at a time: a faster PC
         if key not in self._translators:
-            from . import cuda_libs
-
-            device = self.base_cfg.get("device", "cuda")
-            if device in ("cuda", "vulkan") and not cuda_libs.available():
-                device = "cpu"
-            fast_cpu = self.base_cfg.get("fast_cpu_translation", True)
-            self._translators[key] = lens_translate.LensTranslator(
-                key, device, factory=lambda k, d: self._load_translator(k, d, fast_cpu))
+            self._translators[key] = self._new_translator(key)
         return self._translators[key]
+
+    def _new_translator(self, key):
+        from . import cuda_libs
+
+        device = self.base_cfg.get("device", "cuda")
+        if device in ("cuda", "vulkan") and not cuda_libs.available():
+            device = "cpu"
+        fast_cpu = self.base_cfg.get("fast_cpu_translation", True)
+        return lens_translate.LensTranslator(key, device, factory=lambda k, d: self._load_translator(k, d, fast_cpu))
+
+    def translator_for(self, choice=None):
+        """A translator for a file or a movie: `choice` is a key of lens_translate.CHOICES (None: the one Lens
+        uses now). The one Lens uses is shared; another one is the job's own — `release_translator()` lets go
+        of it (its model leaves the memory) when the job's window closes."""
+        if choice is None:
+            return self.translator()
+        key = lens_translate.resolve(choice, self.base_cfg)
+        if key == lens_translate.resolve(self.cfg["translator"], self.base_cfg):
+            return self.translator()
+        return self._new_translator(key)
+
+    def release_translator(self, translator):
+        """After a job: its own translator is switched off; the one Lens uses stays."""
+        if translator is None or translator in self._translators.values():
+            return
+        self._switch_off(translator.key, translator)
 
     def _load_translator(self, key, device, fast_cpu):
         """Runs in a worker thread the first time a translator is needed; says so on the screen."""
@@ -596,7 +615,9 @@ class LensApp(LensMenuMixin):
         return self.main_window
 
     # ---- files ---------------------------------------------------------------
-    def open_file(self, path=None):
+    def open_file(self, path=None, target=None, translator=None):
+        """Translate a file in a window of its own: into `target` (a language code; None: Lens's language)
+        with `translator` (a key of lens_translate.CHOICES; None: the one Lens uses)."""
         if path is None:
             path, _ = QFileDialog.getOpenFileName(None, "Translate a file", self.cfg.get("last_folder") or "",
                                                   lens_files.OPEN_FILTER)
@@ -610,11 +631,19 @@ class LensApp(LensMenuMixin):
         self._set(last_folder=os.path.dirname(path))
         from .lens_file_window import FileWindow
 
-        window = FileWindow(path, self.target, self.translator(), self.cfg["ocr_language"], self.cfg["style"],
-                            open_another=self.open_file)
+        window = FileWindow(path, target or self.target, self.translator_for(translator), self.cfg["ocr_language"],
+                            self.cfg["style"], open_another=self.open_file, choose_translator=self.translator_for,
+                            release_translator=self.release_translator, target_choices=self._target_choices(),
+                            translator_choice=translator or self.cfg["translator"], notify=self._notify)
         self.file_windows.append(window)
-        window.destroyed.connect(lambda *_: self.file_windows.remove(window) if window in self.file_windows
-                                 else None)
+
+        def closed(*_):
+            if window in self.file_windows:
+                self.file_windows.remove(window)
+            # The translator the window ended with (it may have been changed there); a plain Python attribute,
+            # still readable after the Qt window itself is gone.
+            self.release_translator(window.translator)
+        window.destroyed.connect(closed)
         window.show()
         return window
 

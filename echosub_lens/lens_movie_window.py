@@ -3,7 +3,8 @@
 """EchoSub Lens: "Movie to subtitles" — all the text of a movie in an .srt file, ready to translate.
 
 The work runs in a thread of its own (echosub_lens/movie.py); the window shows what it is doing and the
-time left, and when it is done offers the folder and the file translator.
+time left; it can translate the subtitles as soon as they are written (any language, any translator), and
+when it is done offers the folder and the file translator.
 """
 import logging
 import os
@@ -12,21 +13,27 @@ import time
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QProgressBar, QPushButton, QRadioButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+                               QMessageBox, QProgressBar, QPushButton, QRadioButton, QVBoxLayout, QWidget)
 
-from . import config, languages, lens_ocr, movie
+from . import config, languages, lens_ocr, lens_translate, movie
 from .lens_window import STYLE
 
 log = logging.getLogger(__name__)
 
 TITLE = "Movie to subtitles"
 SOURCES = ("inside", "speech", "burned")
+TRANSLATOR_HINTS = {
+    lens_translate.SAME: "The translator Lens uses now",
+    "google": "Google Translate: online and fast, and it takes no memory on your PC",
+    "nllb-600m": "NLLB 600M: offline, on your graphics card — private, nothing leaves your PC",
+    "nllb-1.3b": "NLLB 1.3B: offline and more accurate, on your graphics card — private, nothing leaves your PC",
+}
 
 
 class _Signals(QObject):
     progress = Signal(float, str)
-    done = Signal(object)        # movie.Result
+    done = Signal(object, object)  # movie.Result, {"translated": path, "skipped": why, "error": why}
     failed = Signal(str)
     canceled = Signal()
 
@@ -52,6 +59,10 @@ class MovieWindow(QWidget):
         self.movie_path = ""
         self.tracks = []
         self.result = None
+        self.translated = ""         # the translated .srt, once it is written
+        self._translator = None      # the translator of the work running now (released when it ends)
+        self._written = ""           # the .srt the work running now has saved so far
+        self._phase_started = 0.0
         self._custom_out = False
         self._worker = None
         self._cancel = threading.Event()
@@ -61,7 +72,7 @@ class MovieWindow(QWidget):
         self.setWindowTitle(f"{TITLE} — EchoSub Lens")
         self.setWindowIcon(QIcon(os.path.join(config.ASSETS_DIR, "echosub.ico")))
         self.setStyleSheet(STYLE)
-        self.resize(760, 700)
+        self.resize(760, 800)
         self.signals = _Signals()
         self.signals.progress.connect(self._progress)
         self.signals.done.connect(self._done)
@@ -137,6 +148,37 @@ class MovieWindow(QWidget):
         self.save_as_button.clicked.connect(self.choose_output)
         layout.addWidget(self._row(self.out_edit, self.save_as_button, stretch=False))
 
+        self._section(layout, "Translate the subtitles")
+        self.target_box = QComboBox()
+        self.target_box.setMaxVisibleItems(20)
+        self.target_box.setToolTip("The language the subtitles are translated into")
+        for code, name in self.lens._target_choices():
+            if code is None:
+                self.target_box.insertSeparator(self.target_box.count())
+            elif code:  # "" (Lens's default) is the language itself here
+                self.target_box.addItem(name, code)
+        target = self.lens.target
+        if self.target_box.findData(target) < 0:
+            self.target_box.insertItem(0, languages.name(target), target)
+        self.target_box.setCurrentIndex(self.target_box.findData(target))
+        self.target_box.currentIndexChanged.connect(lambda _: self._update())
+        self.translator_box = QComboBox()
+        for key, label in lens_translate.CHOICES.items():
+            self.translator_box.addItem(label, key)
+            self.translator_box.setItemData(self.translator_box.count() - 1, TRANSLATOR_HINTS.get(key, label),
+                                            Qt.ToolTipRole)
+        self.translator_box.setCurrentIndex(max(0, self.translator_box.findData(self.lens.cfg.get("translator"))))
+        self.translator_box.setToolTip("Google is online and fast; NLLB works offline on your graphics card, "
+                                       "and nothing leaves your PC")
+        layout.addWidget(self._row(QLabel("Translate into"), self.target_box, QLabel("with"), self.translator_box))
+        self.translate_after = QCheckBox("Translate them as soon as they are written")
+        self.translate_after.setChecked(True)
+        self.translate_after.toggled.connect(lambda _: self._update())
+        layout.addWidget(self._row(self.translate_after))
+        self._help(layout, "A second file is saved next to the first, in the language chosen (Movie.ar.srt): the "
+                           "numbers and times stay, a two-line subtitle stays two lines, and each speaker of a "
+                           "dialogue keeps a line of their own.")
+
         layout.addSpacing(14)
         self.start_button = QPushButton("▶  Start")
         self.start_button.setObjectName("start")
@@ -166,7 +208,9 @@ class MovieWindow(QWidget):
         self.translate_button.setObjectName("start")
         self.translate_button.setCursor(Qt.PointingHandCursor)
         self.translate_button.clicked.connect(self.translate)
-        self.done_row = self._row(self.translate_button, self.folder_button)
+        self.open_translated_button = QPushButton("Open the translated subtitles")
+        self.open_translated_button.clicked.connect(self.open_translated)
+        self.done_row = self._row(self.translate_button, self.open_translated_button, self.folder_button)
         layout.addWidget(self.done_row)
         layout.addStretch(1)
 
@@ -211,6 +255,7 @@ class MovieWindow(QWidget):
         self.movie_path = path
         self.movie_edit.setText(path)
         self.result = None
+        self.translated = ""
         self._custom_out = False
         try:
             self.tracks = movie.subtitle_tracks(path)
@@ -308,20 +353,26 @@ class MovieWindow(QWidget):
                 self, TITLE, f"{os.path.basename(out)} already exists. Replace it?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return False
+        plan = self._translation_plan(out)
+        if plan is False:
+            return False
         source = self.source()
         job = self._job(source, out)
         if job is None:
             return False
+        if plan is not None and not plan.get("skip"):
+            self._translator = plan["translator"] = self.lens.translator_for(self.translator_key())
         self.result = None
+        self.translated = ""
         self._cancel.clear()
-        self._started = time.monotonic()
+        self._started = self._phase_started = time.monotonic()
         self.progress_bar.setValue(0)
         self.left_label.setText("")
         what = {"inside": "Reading the subtitles inside", "speech": "Recognizing the speech in",
                 "burned": "Reading the text in the picture of"}[source]
         self._say(f"{what} {os.path.basename(self.movie_path)}…")
         self.lens._notify(f"{what} {os.path.basename(self.movie_path)}…")
-        self._worker = threading.Thread(target=self._work, args=(job,), name="lens-movie", daemon=True)
+        self._worker = threading.Thread(target=self._work, args=(job, plan), name="lens-movie", daemon=True)
         self._worker.start()
         self._update()
         return True
@@ -346,9 +397,54 @@ class MovieWindow(QWidget):
         return lambda: movie.read_burned(path, out, language=ocr, region=region, progress=progress,
                                          should_cancel=cancel)
 
-    def _work(self, job):
+    def target(self):
+        """The language the subtitles are translated into."""
+        return self.target_box.currentData()
+
+    def translator_key(self):
+        """Who translates them: a key of lens_translate.CHOICES."""
+        return self.translator_box.currentData()
+
+    def _translation_plan(self, out):
+        """None: no translating; False: do not start (a file is not to be replaced); else what to do."""
+        if not self.translate_after.isChecked():
+            return None
+        target = self.target()
+        path = movie.translated_path(out, target)
+        if os.path.abspath(path) == os.path.abspath(out) or self._language() == target:
+            return {"target": target, "path": path, "skip": True}
+        if os.path.exists(path) and QMessageBox.question(
+                self, TITLE, f"{os.path.basename(path)} already exists. Replace it?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return False
+        return {"target": target, "path": path}
+
+    def _translate(self, result, plan):
+        """Worker thread: the subtitles just written, translated into a second file."""
+        target = plan["target"]
+        if plan.get("skip") or result.language == target:
+            return {"skipped": f"they are already in {languages.name(target)}"}
+        if os.path.abspath(plan["path"]) == os.path.abspath(result.path):
+            return {"skipped": f"they are already in {languages.name(target)}"}
+        self._phase_started = time.monotonic()
+        try:
+            movie.translate_srt(result.path, plan["path"], plan["translator"], target, self.signals.progress.emit,
+                                self._cancel.is_set)
+        except movie.Canceled:
+            raise
+        except Exception as e:
+            log.exception("Translating the movie subtitles failed for %s", result.path)
+            return {"error": str(e) or e.__class__.__name__}
+        return {"translated": plan["path"]}
+
+    def _work(self, job, plan=None):
+        self._written = ""
         try:
             result = job()
+            self._written = result.path
+            extra = {}
+            if plan is not None and not self._cancel.is_set():
+                extra = self._translate(result, plan)
         except movie.Canceled:
             self.signals.canceled.emit()
             return
@@ -362,7 +458,7 @@ class MovieWindow(QWidget):
         if self._cancel.is_set():
             self.signals.canceled.emit()
         else:
-            self.signals.done.emit(result)
+            self.signals.done.emit(result, extra)
 
     def cancel(self):
         if self.busy():
@@ -376,22 +472,39 @@ class MovieWindow(QWidget):
             return
         self.progress_bar.setValue(int(max(0.0, min(fraction, 1.0)) * 1000))
         self.status.setText(text)
-        self.left_label.setText(time_left(time.monotonic() - self._started, fraction))
+        self.left_label.setText(time_left(time.monotonic() - self._phase_started, fraction))
 
-    def _done(self, result):
+    def _release_translator(self):
+        translator, self._translator = self._translator, None
+        if translator is not None:
+            self.lens.release_translator(translator)
+
+    def _done(self, result, extra=None):
+        extra = extra or {}
         self._worker = None
+        self._release_translator()
         self.result = result
+        self.translated = extra.get("translated", "")
         self.progress_bar.setValue(1000)
         self.left_label.setText("")
         took = time.monotonic() - self._started
         note = f" ({result.note})" if result.note else ""
-        self._say(f"Done in {int(took // 60)} min {int(took % 60)} s{note}: {result.cues} subtitles saved in "
-                  f"{result.path}")
+        text = f"Done in {int(took // 60)} min {int(took % 60)} s{note}: {result.cues} subtitles saved in {result.path}"
         self.lens._notify(f"Movie subtitles saved: {os.path.basename(result.path)} ({result.cues} subtitles)")
+        if self.translated:
+            text += f"\nTranslated into {languages.name(self.target())}: {self.translated}"
+            self.lens._notify(f"Translated subtitles saved: {os.path.basename(self.translated)}")
+        elif extra.get("skipped"):
+            text += f"\nNot translated: {extra['skipped']}."
+        elif extra.get("error"):
+            text += f"\nTranslating them failed: {extra['error']}"
+            self.lens._notify(f"Translating the movie subtitles failed: {extra['error']}")
+        self._say(text)
         self._update()
 
     def _failed(self, message):
         self._worker = None
+        self._release_translator()
         self.progress_bar.setValue(0)
         self.left_label.setText("")
         self._say(f"Could not make the subtitles: {message}")
@@ -400,9 +513,13 @@ class MovieWindow(QWidget):
 
     def _canceled(self):
         self._worker = None
+        self._release_translator()
         self.progress_bar.setValue(0)
         self.left_label.setText("")
-        self._say("Canceled — nothing was saved.")
+        if self._written:  # stopped while translating: the subtitles themselves are saved
+            self._say(f"Canceled — the subtitles were saved in {self._written}, not translated.")
+        else:
+            self._say("Canceled — nothing was saved.")
         self.lens._notify("Movie subtitles canceled")
         self._update()
 
@@ -412,7 +529,8 @@ class MovieWindow(QWidget):
     def _update(self):
         busy = self.busy()
         for widget in (self.choose_button, self.source_speech, self.source_burned, self.track_box, self.spoken_box,
-                       self.model_box, self.region_box, self.ocr_box, self.out_edit, self.save_as_button):
+                       self.model_box, self.region_box, self.ocr_box, self.out_edit, self.save_as_button,
+                       self.target_box, self.translator_box, self.translate_after):
             widget.setEnabled(not busy)
         self.source_inside.setEnabled(not busy and any(t.is_text or t.codec in movie.BITMAP_CODECS
                                                        for t in self.tracks))
@@ -421,6 +539,7 @@ class MovieWindow(QWidget):
         self.cancel_button.setEnabled(busy and not self._cancel.is_set())
         self.progress_bar.setVisible(busy or self.result is not None)
         self.done_row.setVisible(self.result is not None and not busy)
+        self.open_translated_button.setVisible(bool(self.translated))
 
     # ---- when it is done ---------------------------------------------------------
     def open_folder(self):
@@ -428,17 +547,24 @@ class MovieWindow(QWidget):
             return
         import subprocess
 
-        path = os.path.normpath(self.result.path)
+        path = os.path.normpath(self.translated or self.result.path)
         try:
             subprocess.Popen(["explorer", f"/select,{path}"])
         except OSError:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
         self.lens._notify("The folder of the subtitles opens")
 
+    def open_translated(self):
+        """The translated subtitles, in the program Windows opens .srt files with."""
+        if self.translated:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.translated))
+            self.lens._notify(f"Opening {os.path.basename(self.translated)}")
+
     def translate(self):
-        """The file translator, with the new subtitles: it keeps the numbers and the times."""
+        """The file translator, with the new subtitles (it keeps the numbers and the times), into the language and
+        with the translator chosen here."""
         if self.result is not None:
-            return self.lens.open_file(self.result.path)
+            return self.lens.open_file(self.result.path, self.target(), self.translator_key())
         return None
 
     def present(self):

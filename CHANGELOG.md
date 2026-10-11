@@ -3,6 +3,13 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] — 2026-10-12
+
+### Added
+- **Any language, any translator, for movies and files.** The movie window has *Translate into* and *with* (Google, NLLB 600M or 1.3B): with *Translate them as soon as they are written*, a translated copy (`Movie.ar.srt`) is written right after the subtitles, dialogue dashes and line breaks kept. The file translator window has the same two choices at the top: change one and the file is translated again.
+- A translator chosen for a movie or a file is its own: the one translating the screen stays as it is, and the other one leaves the memory when its window closes.
+- Command line: `--to LANG --translator KEY`, e.g. `EchoSubLens.exe --movie-to-srt Movie.mkv --to ar --translator google`.
+
 ## [1.4.0] — 2026-10-12
 
 ### Added
