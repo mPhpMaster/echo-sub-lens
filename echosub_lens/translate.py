@@ -94,6 +94,17 @@ class NLLBTranslator:
         return [" ".join(parts).strip() if parts else text for parts, text in zip(out, texts)]
 
 
+def transient(error):
+    """True for a failure of the network or a passing fault of Google's servers (no answer, a timeout, HTTP
+    5xx): no reason to stop using a service. A malformed answer or another HTTP 4xx is."""
+    import requests
+
+    if isinstance(error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    response = getattr(error, "response", None) if isinstance(error, requests.exceptions.HTTPError) else None
+    return response is not None and (getattr(response, "status_code", None) or 0) >= 500
+
+
 class RateLimited(Exception):
     """Google Translate refuses requests for a while; `retry_in` is how long Lens waits before asking again."""
 
@@ -105,6 +116,7 @@ class RateLimited(Exception):
 class GoogleTranslator:
     streaming = False  # avoid hammering the web API with partial results
     MIN_INTERVAL = 0.35          # s between requests (Google allows about 5 per second)
+    BROKEN_FOR = 300.0           # s a service that answered nonsense is left alone before it is tried again
     RETRY_DELAYS = (0.5, 1.5)    # s to wait before retrying a request Google refused
     COOLDOWN = (5.0, 60.0)       # s to pause after the retries fail: first time, maximum (doubles each time)
 
@@ -117,8 +129,8 @@ class GoogleTranslator:
         self._too_many = TooManyRequests
         self._cache = {}
         self._session = None
-        self._web_only = False
-        self._many_broken = False
+        self._web_only_until = 0.0     # a service that answered nonsense is left alone until then
+        self._many_broken_until = 0.0
         self._lock = threading.Lock()
         self._last_request = 0.0
         self._paused_until = 0.0
@@ -173,17 +185,22 @@ class GoogleTranslator:
 
     def _ask_many(self, texts, key):
         """Chrome's service first; when it refuses or fails, the other services, many lines in one text."""
-        refused = False
-        if not self._many_broken:
+        refused = asked = False
+        if time.monotonic() >= self._many_broken_until:
+            asked = True
             try:
                 return self._ask_chrome(texts, key)
             except self._too_many:
                 refused = True
             except Exception as e:
-                log.warning("Google's Chrome translation service failed (%s); using the others", e)
-                self._many_broken = True
+                if transient(e):  # the network, not the service: only this request goes elsewhere
+                    log.warning("Google's Chrome translation service did not answer (%s); asking another", e)
+                else:
+                    log.warning("Google's Chrome translation service failed (%s); using the others for %d s",
+                                e, self.BROKEN_FOR)
+                    self._many_broken_until = time.monotonic() + self.BROKEN_FOR
         try:
-            return self._ask_lines(texts, key)
+            return self._ask_lines(texts, key, paced=asked)
         except self._too_many:
             raise
         except Exception:
@@ -204,9 +221,13 @@ class GoogleTranslator:
             raise ValueError("Google answered a different number of texts")
         return [(a[0] if isinstance(a, list) else a) or t for a, t in zip(answer, texts)]
 
-    def _ask_lines(self, texts, key):
+    def _ask_lines(self, texts, key, paced=False):
         """Lines joined in one text: Google keeps line breaks, so the answer splits back line by line. When
-        it merged some, the two halves are asked again (a few requests, not one per line)."""
+        it merged some, the two halves are asked again (a few requests, not one per line).
+
+        `paced`: a request was already sent for these texts, so this one waits its turn (MIN_INTERVAL)."""
+        if paced:
+            self._pace()
         joined = "\n".join(t.replace("\n", " ") for t in texts)
         parts = [p.strip() for p in (self._ask(joined, key) or "").split("\n")]
         if len(parts) == len(texts):
@@ -214,7 +235,12 @@ class GoogleTranslator:
         if len(texts) == 1:
             return [" ".join(parts)]
         half = len(texts) // 2
-        return self._ask_lines(texts[:half], key) + self._ask_lines(texts[half:], key)
+        return self._ask_lines(texts[:half], key, paced=True) + self._ask_lines(texts[half:], key, paced=True)
+
+    def _pace(self):
+        """Wait until MIN_INTERVAL has passed since the last request (called with self._lock held)."""
+        time.sleep(max(self._last_request + self.MIN_INTERVAL - time.monotonic(), 0.0))
+        self._last_request = time.monotonic()
 
     def _web_session(self):
         if self._session is None:
@@ -227,14 +253,19 @@ class GoogleTranslator:
     def _ask(self, text, key):
         """One request: Google's JSON service (one kept-open connection, about 0.2 s), or, when that fails
         for another reason than too many requests, the translate.google.com page through deep-translator."""
-        if not self._web_only:
+        if time.monotonic() >= self._web_only_until:
             try:
                 return self._ask_json(text, key)
             except self._too_many:
                 raise
             except Exception as e:
-                log.warning("Google's translation service failed (%s); using the web page instead", e)
-                self._web_only = True
+                if transient(e):  # the network, not the service: only this request goes to the web page
+                    log.warning("Google's translation service did not answer (%s); asking the web page", e)
+                else:
+                    log.warning("Google's translation service failed (%s); using the web page for %d s",
+                                e, self.BROKEN_FOR)
+                    self._web_only_until = time.monotonic() + self.BROKEN_FOR
+            self._pace()
         if key not in self._cache:
             self._cache[key] = self._cls(source="auto", target=key)
         return self._cache[key].translate(text)

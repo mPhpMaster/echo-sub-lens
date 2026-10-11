@@ -9,6 +9,10 @@ sentencepiece==0.2.2
 deep-translator==1.11.4
 rapidfuzz==3.14.5            # text read a little differently keeps its translation
 huggingface_hub==1.31.0
+# Movie to subtitles: speech recognition (the same version as EchoSub). It brings PyAV (av), whose own FFmpeg
+# libraries read every movie format and its subtitle tracks, so no ffmpeg.exe is needed
+faster-whisper==1.2.1
+av==17.1.0
 requests==2.34.2
 # Windows' own text recognition (OCR) through WinRT
 winrt-runtime==3.2.1

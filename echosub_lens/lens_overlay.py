@@ -10,7 +10,7 @@ import ctypes
 import sys
 
 from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import QLabel, QMenu, QWidget
 
 from . import languages, lens_style
@@ -76,6 +76,16 @@ def split_like(text, count):
     return "\n".join(lines)
 
 
+RLM, LRM = "\u200f", "\u200e"  # right-to-left and left-to-right marks: invisible, they set a line's direction
+
+
+def directed(text, rtl):
+    """Every line starts with a direction mark. Without one, Qt takes a line's direction from its first letter:
+    an Arabic line that starts with an English word ("Windows هو ...") would be laid out left to right."""
+    mark = RLM if rtl else LRM
+    return "\n".join(mark + line.lstrip(RLM + LRM) for line in text.split("\n"))
+
+
 def _css(rgb, alpha=255):
     return f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {alpha})"
 
@@ -93,7 +103,8 @@ class BlockLabel(QLabel):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
         self.setLayoutDirection(Qt.RightToLeft if rtl else Qt.LeftToRight)
-        self.setAlignment((Qt.AlignRight if rtl else Qt.AlignLeft) | Qt.AlignVCenter)
+        # Absolute: in a right-to-left label Qt would otherwise turn "right" into left (and left into right)
+        self.setAlignment(Qt.AlignAbsolute | (Qt.AlignRight if rtl else Qt.AlignLeft) | Qt.AlignVCenter)
         self.setToolTip(block.text)
         background, foreground = lens_style.colors(style, block.background, block.foreground)
         self.setStyleSheet(f"QLabel {{ background: {_css(background, round(255 * style['opacity']))}; "
@@ -103,6 +114,12 @@ class BlockLabel(QLabel):
     def mousePressEvent(self, event):
         self.window().activateWindow()  # take the keyboard, so Ctrl+C copies the selection
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.Copy) and self.hasSelectedText():
+            _copy(self.selectedText())
+            return
+        super().keyPressEvent(event)
 
     def _menu(self, pos):
         menu = QMenu(self)
@@ -121,7 +138,8 @@ class BlockLabel(QLabel):
 
 
 def _copy(text):
-    QGuiApplication.clipboard().setText(text)
+    """Without the invisible direction marks: they would follow the text into a search box or a file name."""
+    QGuiApplication.clipboard().setText(text.replace(RLM, "").replace(LRM, ""))
 
 
 class LensOverlay(QWidget):
@@ -223,6 +241,7 @@ class LensOverlay(QWidget):
             start_px = max(block.line_height / s * 1.05, READABLE_PX) * scale
         one_line = len(block.lines) == 1  # a label or a button: kept on one line, a little wider if need be
         text = block.translation if one_line else split_like(block.translation, len(block.lines))
+        text = directed(text, rtl)
         if one_line:
             natural = QFontMetrics(_font(family, start_px, bold)).horizontalAdvance(block.translation) + 8
             w = max(w, min(natural, w * (3 if fixed else 1.6), self.width() - 2 * self._margin - x))

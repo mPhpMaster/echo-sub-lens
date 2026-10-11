@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ECHOSUB_LENS_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_data"))
 
-from PySide6.QtCore import QRect  # noqa: E402
+from PySide6.QtCore import QRect, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from echosub_lens import app_windows, lens_app, lens_ui  # noqa: E402
@@ -152,6 +152,26 @@ class TextWindowLookTest(unittest.TestCase):
         self.assertEqual((settings["transparent"], settings["opacity"], settings["direction"]), (False, 25, "auto"))
         window.close()
 
+    def test_turning_transparency_on_and_off_keeps_the_place_and_size(self):
+        from echosub_lens.lens_text_window import TextWindow
+
+        window = TextWindow()
+        hint = window.minimumSizeHint()  # the test screen's fonts are not Windows' own
+        rect = [350, 330, max(560, hint.width() + 80), max(300, hint.height() + 20)]  # room for the ✕ too
+        window.setGeometry(*rect)
+        window.show()
+        app.processEvents()
+        saved = []
+        window.changed.connect(saved.append)
+        for on in (True, False, True, False):
+            window.transparent.setChecked(on)
+            app.processEvents()
+            self.assertEqual(list(window.geometry().getRect()), rect)
+            self.assertEqual(window.testAttribute(Qt.WA_TranslucentBackground), on)
+            self.assertEqual(bool(window.windowFlags() & Qt.FramelessWindowHint), on)
+        self.assertTrue(all(s["geometry"] == rect for s in saved))
+        window.close()
+
     def test_the_translations_on_the_screen_can_change_direction(self):
         from echosub_lens.lens_overlay import LensOverlay
         from echosub_lens.lens_style import merged
@@ -161,9 +181,19 @@ class TextWindowLookTest(unittest.TestCase):
         block = Block([Line([("Hello", Box(10, 10, 60, 20))])], translation="مرحبا")
         overlay.show_blocks([block], "ar")
         self.assertEqual(overlay.labels[0].layoutDirection().name, "LeftToRight")
+        self.assertTrue(overlay.labels[0].alignment() & Qt.AlignLeft)
         overlay.set_style(merged({"direction": "auto"}))
-        self.assertEqual(overlay.labels[0].layoutDirection().name, "RightToLeft")
+        label = overlay.labels[0]
+        self.assertEqual(label.layoutDirection().name, "RightToLeft")
+        # right means right: Qt would turn AlignRight into left in a right-to-left label without AlignAbsolute
+        self.assertTrue(label.alignment() & Qt.AlignRight and label.alignment() & Qt.AlignAbsolute)
         overlay.close()
+
+    def test_an_english_word_first_does_not_turn_an_arabic_line_around(self):
+        from echosub_lens.lens_overlay import LRM, RLM, directed
+
+        self.assertEqual(directed("Windows هو نظام\nسطر", True), RLM + "Windows هو نظام\n" + RLM + "سطر")
+        self.assertEqual(directed(RLM + "- مرحبا", False), LRM + "- مرحبا")
 
 
 if __name__ == "__main__":

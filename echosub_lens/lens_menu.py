@@ -59,6 +59,7 @@ class LensMenuMixin:
         self.act_mouse.toggled.connect(self.use_mouse_mode)
         self._build_lens_menu(what)
         self._item(m, "Translate a file (picture, PDF, Word, text)…", "file")
+        self._item(m, "Translate a movie (subtitles to .srt)…", "movie")
         m.addSeparator()
 
         self._choice_menu(m, "Translate into", self._target_choices(), lambda: self.cfg["target_lang"] or "",

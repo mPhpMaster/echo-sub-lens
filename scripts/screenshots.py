@@ -61,6 +61,13 @@ def main():
             window.grab().save(os.path.join(OUT, f"window-{page}.png"))
         window.hide()
 
+        lens.open_movie()
+        movie = lens.movie_window
+        movie.resize(760, 640)
+        settle(app)
+        movie.grab().save(os.path.join(OUT, "movie-window.png"))
+        movie.hide()
+
         lens.menu.adjustSize()
         lens.menu.grab().save(os.path.join(OUT, "tray-menu.png"))
 

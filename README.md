@@ -4,7 +4,8 @@
 
 **Translate the text on your screen, in place.** Pick an area, a whole screen, or let a small lens follow your
 mouse — every piece of text in it is shown translated, right on top of the original, while you keep using the
-page or program underneath. It also translates files: pictures, PDF, Word and subtitles.
+page or program underneath. It also translates files — pictures, PDF, Word and subtitles — and movies: it
+takes all the text of a movie into a subtitle file, ready to translate.
 
 EchoSub Lens is the screen-translation tool of [EchoSub](https://github.com/mPhpMaster/echo-sub) (live, translated
 captions for anything your PC plays), released here as a project of its own. It runs on its own, or beside EchoSub.
@@ -23,6 +24,8 @@ captions for anything your PC plays), released here as a project of its own. It 
 | *The translation window: a dialogue keeps a line, and its dash, for each speaker* | *About: version, author, links and ♥ support* |
 | ![Transparent translation window](docs/images/translation-window-transparent.png) | ![The right-click menu](docs/images/tray-menu.png) |
 | *Transparent, as much as you like: only the words stay solid* | *The right-click menu, in groups* |
+| ![Movie to subtitles](docs/images/movie-window.png) | |
+| *A movie to an .srt file: from its own subtitles, its speech or the text in its picture* | |
 
 <p align="center"><img src="docs/images/progress-note.png" alt="A note in the corner of the screen while Lens translates"><br>
 <i>Everything Lens does shows in a small note in the corner of the screen.</i></p>
@@ -50,6 +53,13 @@ The pictures are made by `scripts\screenshots.py`.
 - **A file** (`Ctrl+Alt+F`): pictures (PNG, JPG, BMP, GIF, TIFF, WebP), PDF (scanned ones too), Word `.docx`
   (headings, tables, bold and colours kept — only the words change), text and subtitle files (`.txt`, `.srt`, `.md`,
   `.csv`; subtitle numbers and times stay). Save a translated copy; the original is never changed.
+- **A movie** (*Translate a movie (subtitles to .srt)…* in the menu, or *Translate a movie…* in the window): pick a
+  movie (MKV, MP4, AVI, MOV, WebM, WMV, TS…) and Lens takes **all its text into an `.srt` file** — from the
+  **subtitles inside the movie** (text tracks as they are; Blu-ray and DVD picture subtitles read with Windows'
+  text recognition), from **what is said** (speech recognition with Whisper, on your NVIDIA graphics card or the
+  processor, any language), or from **text burned into the picture** (read twice a second). A progress bar shows
+  what it does and the time left; then *Translate the subtitles…* opens the file translator, which saves a
+  translated copy with the numbers and times kept.
 
 **The translated text in a window of its own**
 - **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —
@@ -93,6 +103,9 @@ The pictures are made by `scripts\screenshots.py`.
   downloaded the first time you choose it. Only one translator is loaded at a time: choosing another one frees the
   memory of the one before. Google gets every text of the screen in one request and answers each on its own; when
   one of its services says "too many requests", Lens asks another, and only pauses for a few seconds if all refuse.
+- **Movies:** PyAV (FFmpeg's own libraries, no `ffmpeg.exe` needed) reads the movie, its sound and its subtitle
+  tracks; speech is recognized by faster-whisper (Large v3 Turbo by default, shared with EchoSub's models) only where
+  someone speaks; burned-in text is read with Windows OCR, and the same text on frames in a row becomes one subtitle.
 
 ## Requirements
 
@@ -117,6 +130,18 @@ run.bat
 Or `.venv\Scripts\python -m echosub_lens [file]` — a file name opens that file to translate.
 Settings are kept in `lens.json` and the log in `logs\lens.log`, in the project folder (or in
 `%LOCALAPPDATA%\EchoSubLens` for a built copy; `ECHOSUB_LENS_DATA_DIR` overrides it).
+
+## Movies from the command line
+
+The subtitles of a movie without opening a window — for a batch of movies, or from a script:
+
+```bat
+"D:\Programs\EchoSub Lens\EchoSubLens.exe" --movie-to-srt "Movie.mkv" --from speech --language en
+```
+
+`--from` is `inside` (the movie's own text subtitles; `inside:N` for stream N), `speech` (speech recognition) or
+`burned` (text in the picture); without it Lens uses the subtitles inside the movie when there are some, else the
+speech. `--out` names the .srt file (default: next to the movie); a `.log` next to it says how it went.
 
 ## Build the installer
 

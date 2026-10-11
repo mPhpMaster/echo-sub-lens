@@ -104,6 +104,10 @@ def main():
     cuda_setup.setup()
     logging_setup.setup()
     log = logging.getLogger("echosub_lens")
+    if "--movie-to-srt" in sys.argv:  # no window, and not only one copy: it runs beside a running Lens
+        from . import movie
+
+        return movie.cli(sys.argv[sys.argv.index("--movie-to-srt") + 1:])
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 

@@ -182,7 +182,7 @@ class OverlayTest(unittest.TestCase):
         overlay.show_blocks([block, Block([line("Nothing", 10, 10)], translation="")], "ar")
         self.assertEqual(len(overlay.labels), 1)
         label = overlay.labels[0]
-        self.assertEqual(label.text(), "حذف الحساب")
+        self.assertEqual(label.text().lstrip("‏"), "حذف الحساب")  # after an invisible right-to-left mark
         self.assertEqual(label.toolTip(), "Delete account")  # the original, on hover
         self.assertTrue(label.textInteractionFlags())
         self.assertLessEqual(abs(label.x() - 100), 5)

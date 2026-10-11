@@ -4,6 +4,7 @@
 import logging
 import os
 import threading
+import time
 
 from PySide6.QtCore import QRect, QTimer
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen
@@ -53,8 +54,10 @@ class LensApp(LensMenuMixin):
         self._mouse_area = None      # (QScreen, QRect) of the lens around the mouse
         self._window = None          # app_windows.AppWindow translated in mode "window"
         self._window_spot = None     # where it was last seen; None: minimized, gone or behind another window
+        self._next_window_search = 0.0
         self._anchor = None          # where the pointer was when the lens was last placed
         self.file_windows = []
+        self.movie_window = None     # "Movie to subtitles": one window, kept
         self.text_window = None
         self._save_text_window = QTimer()
         self._save_text_window.setSingleShot(True)
@@ -106,6 +109,7 @@ class LensApp(LensMenuMixin):
             "toggle": self.toggle,
             "area": self.choose_area,
             "file": self.open_file,
+            "movie": self.open_movie,
             "mouse_mode": lambda: self.act_mouse.toggle(),
             "lens_bigger": lambda: self.resize_lens(True),
             "lens_smaller": lambda: self.resize_lens(False),
@@ -339,6 +343,10 @@ class LensApp(LensMenuMixin):
         """The window chosen, found again by its title and program after Lens started or it was opened again."""
         if self._window is not None and app_windows.alive(self._window.hwnd):
             return self._window
+        now = time.monotonic()
+        if now < self._next_window_search:
+            return None  # gone: look for it once a second, not on every tick of the 60 ms timer
+        self._next_window_search = now + 1.0
         self._window = app_windows.find(self.cfg["window_title"], self.cfg["window_program"])
         return self._window
 
@@ -494,10 +502,7 @@ class LensApp(LensMenuMixin):
         self.act_running.setChecked(running)
         self.act_running.blockSignals(False)
         self.tray.setIcon(lens_icon(running))
-        _, rect = self.area()
-        where = {"screen": "a whole screen", "mouse": "the lens around the mouse"}.get(
-            self.cfg["mode"], f"an area of {rect.width()} × {rect.height()}")
-        state = f"translating {where} into {languages.name(self.target)}" if running else "stopped"
+        state = f"translating {self._where()} into {languages.name(self.target)}" if running else "stopped"
         self.tray.setToolTip(f"{LENS_NAME} — {state}")
         if self.main_window is not None and self.main_window.isVisible():
             self.main_window.refresh_state()
@@ -613,6 +618,17 @@ class LensApp(LensMenuMixin):
         window.show()
         return window
 
+    def open_movie(self, path=None):
+        """The "Movie to subtitles" window (one, kept between uses), in front; with `path`, that movie chosen."""
+        if self.movie_window is None:
+            from .lens_movie_window import MovieWindow
+
+            self.movie_window = MovieWindow(self)
+        self.movie_window.present()
+        if path:
+            self.movie_window.choose_movie(path)
+        return self.movie_window
+
     # ---- settings and screen sharing ----------------------------------------------
     def open_settings(self, tab="appearance"):
         """The window, on the Appearance or the Keyboard shortcuts page."""
@@ -651,10 +667,12 @@ class LensApp(LensMenuMixin):
                 self._set_capture_visible(DEFAULTS["capture_visible"])
                 self.set_select_mode(DEFAULTS["select_mode"])
                 self._set_peek(DEFAULTS["peek_seconds"])
-                running = self.scanner.running
-                self.use_screen(DEFAULTS["screen"])
-                if not running:
-                    self.stop()
+                if self.scanner.running:
+                    self.use_screen(DEFAULTS["screen"])
+                else:  # stopped: stays stopped (use_screen would start it)
+                    self._set(mode="screen", screen=DEFAULTS["screen"])
+                    self._fill_screens()
+                    self._sync_mouse_item()
             elif page == "languages":
                 self._set_and_restart(target_lang=DEFAULTS["target_lang"], ocr_language=lens_ocr.AUTO)
             elif page == "translator":
@@ -666,7 +684,10 @@ class LensApp(LensMenuMixin):
         finally:
             self.activity.tell = tell
         self.refresh_menu()
-        self._notify(f"{self.RESET_TITLES.get(page, page)}: back to the default settings")
+        if taken:
+            self._notify("The default keys were not used: another program holds " + ", ".join(taken))
+        else:
+            self._notify(f"{self.RESET_TITLES.get(page, page)}: back to the default settings")
         return taken
 
     def _set_peek(self, seconds):
@@ -686,6 +707,8 @@ class LensApp(LensMenuMixin):
             self.text_window.close()
         for window in list(self.file_windows):
             window.close()
+        if self.movie_window is not None:
+            self.movie_window.shutdown()
         if self.main_window is not None:
             self.main_window.hide()  # keeps its place for next time
         self.tray.hide()

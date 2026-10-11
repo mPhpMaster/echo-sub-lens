@@ -3,6 +3,20 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-10-12
+
+### Added
+- **Movies to subtitles (.srt).** *Translate a movie…* (menu, the Lens window, or a key of your own): choose a movie and Lens writes all its text into an .srt file — from the subtitles inside the file, from what is said (speech recognition with Whisper on the graphics card, sharing EchoSub's models), or from text burned into the picture. Then *Translate the subtitles…* translates the .srt and saves a translated copy, with the numbers and times kept. Also from the command line: `EchoSubLens.exe --movie-to-srt Movie.mkv --from speech`.
+
+### Fixed
+- **Text direction was the wrong way round** for the translations over the screen: *Right to left* put them on the left and *Left to right* on the right (Qt turns "right" into left in a right-to-left label unless told the side is absolute).
+- **The transparent translation window really is see-through now.** Ticking *Transparent* on an open window made it black (Windows makes a window see-through only when it is created, so Lens now makes it again), and unticking it left the window's frame and size wrong. It keeps its place and size, however often it is switched.
+- Clicking the desktop or the taskbar no longer hides the translations of a chosen window; only a window really in front of it does.
+- A network blip no longer sends Google translations to the slower services for the rest of the session: they are tried again, and a service that answered badly is left alone for 5 minutes only.
+- Copying a translation no longer copies the invisible direction marks with it.
+- *Reset this page* on the Translate page no longer starts translating when it was stopped; the tray tooltip names the chosen window.
+- **An English word no longer turns an Arabic line around.** A line that started with an English word ("Windows هو نظام تشغيل") was laid out left to right, so the words came out of order; every line now carries an invisible direction mark.
+
 ## [1.3.0] — 2026-10-12
 
 ### Added

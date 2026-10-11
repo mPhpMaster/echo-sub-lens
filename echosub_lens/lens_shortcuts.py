@@ -13,6 +13,7 @@ ACTIONS = {
     "toggle": ("Start or stop translating", "Ctrl+Alt+T"),
     "area": ("Choose an area of the screen", "Ctrl+Alt+R"),
     "file": ("Translate a file (image, PDF, Word…)", "Ctrl+Alt+F"),
+    "movie": ("Translate a movie (subtitles to .srt)", ""),
     "mouse_mode": ("Lens around the mouse on / off", "Ctrl+Alt+M"),
     "lens_bigger": ("Make the lens bigger", ""),
     "lens_smaller": ("Make the lens smaller", ""),

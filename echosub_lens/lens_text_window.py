@@ -14,9 +14,15 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGraphicsDropShadowEffect, 
 from . import languages
 
 MIN_FONT_PT, MAX_FONT_PT = 8, 40
+RLM, LRM = "\u200f", "\u200e"
 MIN_OPACITY = 0                  # % of the background left when it is transparent (0: only the words)
 DIRECTIONS = (("auto", "Direction: automatic"), ("rtl", "Right to left"), ("ltr", "Left to right"))
 GLASS = "#141414"                # the colour of a transparent window's background
+
+
+def plain(text):
+    """Text to copy: without the invisible direction marks (they would follow it into a search box or a name)."""
+    return text.replace(RLM, "").replace(LRM, "")
 
 
 def reading_order(blocks):
@@ -51,6 +57,7 @@ class TextWindow(QWidget):
             self.direction = "auto"
         self._blocks, self._target = [], None
         self._glass = False
+        self._rebuilding = False  # while the native window is made again: no moves or sizes to save
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -68,10 +75,10 @@ class TextWindow(QWidget):
         self.opacity = QSlider(Qt.Horizontal)
         self.opacity.setRange(MIN_OPACITY, 100)
         self.opacity.setValue(int(settings.get("opacity", 40)))
-        self.opacity.setFixedWidth(140)
+        self.opacity.setMinimumWidth(40)
+        self.opacity.setMaximumWidth(140)
         self.opacity.setToolTip("How much of the background is left: 0 % shows only the words")
         self.opacity_label = QLabel()
-        self.opacity_label.setMinimumWidth(110)
         self.direction_box = QComboBox()
         for value, text in DIRECTIONS:
             self.direction_box.addItem(text, value)
@@ -102,7 +109,7 @@ class TextWindow(QWidget):
         smaller.clicked.connect(lambda: self.set_font_pt(self.font_pt - 2))
         bigger.clicked.connect(lambda: self.set_font_pt(self.font_pt + 2))
         copy = QPushButton("Copy")
-        copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.box.toPlainText()))
+        copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(plain(self.box.toPlainText())))
         for widget in (self.only_here, self.with_original):
             bar.addWidget(widget)
         bar.addStretch(1)
@@ -135,15 +142,27 @@ class TextWindow(QWidget):
         self.grip.setVisible(glass)
         if glass != self._glass:
             self._glass = glass
+            # Windows makes a window see-through only when it is created so: hide it, let go of the native window
+            # and make a new one. The words stay where they were; the title bar comes and goes above them.
             visible, geometry = self.isVisible(), self.geometry()
-            flags = Qt.Window | Qt.WindowStaysOnTopHint
-            if glass:
-                flags |= Qt.FramelessWindowHint
-            self.setAttribute(Qt.WA_TranslucentBackground, glass)
-            self.setWindowFlags(flags)
-            self.setGeometry(geometry)
-            if visible:
-                self.show()
+            self._rebuilding = True
+            try:
+                if self.testAttribute(Qt.WA_WState_Created):
+                    self.hide()
+                    self.destroy(True, True)
+                flags = Qt.Window | Qt.WindowStaysOnTopHint
+                if glass:
+                    flags |= Qt.FramelessWindowHint
+                self.setAttribute(Qt.WA_TranslucentBackground, glass)
+                if not glass:  # Qt leaves this on after translucency: the window would not paint its background
+                    self.setAttribute(Qt.WA_NoSystemBackground, False)
+                self.setWindowFlags(flags)
+                self.setGeometry(geometry)
+                if visible:
+                    self.show()
+                    self.setGeometry(geometry)  # Windows may place a new framed window by itself
+            finally:
+                self._rebuilding = False
         if glass:
             self.box.setStyleSheet("QPlainTextEdit { background: transparent; border: none; color: white; }")
             self.setStyleSheet("QCheckBox, QLabel { color: white; }")
@@ -198,6 +217,8 @@ class TextWindow(QWidget):
         if text == self.box.toPlainText() and not force:
             return  # the same text: keep the reader's place and selection
         rtl = self.right_to_left()
+        if not rtl:  # a dialogue line's right-to-left mark would pull its dash to the end of the line
+            text = "\n".join(line.lstrip(RLM) for line in text.split("\n"))
         self.box.setLayoutDirection(Qt.RightToLeft if rtl else Qt.LeftToRight)
         option = self.box.document().defaultTextOption()
         option.setTextDirection(Qt.RightToLeft if rtl else Qt.LeftToRight)
@@ -225,12 +246,12 @@ class TextWindow(QWidget):
     # ---- window ----------------------------------------------------------------------
     def moveEvent(self, event):
         super().moveEvent(event)
-        if self.isVisible():
+        if self.isVisible() and not self._rebuilding:
             self._changed()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.isVisible():
+        if self.isVisible() and not self._rebuilding:
             self._changed()
 
     def closeEvent(self, event):

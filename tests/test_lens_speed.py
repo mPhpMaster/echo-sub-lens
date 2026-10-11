@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -77,6 +78,7 @@ class SimilarTextTest(unittest.TestCase):
 class GoogleTest(unittest.TestCase):
     def test_lines_google_merged_are_asked_again_in_halves_not_one_by_one(self):
         g = translate.GoogleTranslator()
+        g.MIN_INTERVAL = 0.0
         asked = []
 
         def ask(text, key):
@@ -127,7 +129,7 @@ class GoogleTest(unittest.TestCase):
         page.translate.return_value = "مرحبا"
         g._cls = lambda source, target: page
         self.assertEqual(g.translate("Hello", "auto", "ar"), "مرحبا")
-        self.assertTrue(g._web_only)
+        self.assertGreater(g._web_only_until, time.monotonic())  # for a while, not for good
 
 
 def subtitle_line(text, y):

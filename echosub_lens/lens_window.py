@@ -335,6 +335,12 @@ class LensWindow(QWidget):
         layout.addWidget(self._row(self.file_button))
         self._help(layout, "A picture, a PDF, a Word document or a text or subtitle file, in a window of its own. "
                            "The original is never changed.")
+        self.movie_button = QPushButton("Translate a movie…")
+        self.movie_button.clicked.connect(lambda: self.lens.open_movie())
+        layout.addWidget(self._row(self.movie_button))
+        self._help(layout, "All the text of a movie in a subtitle file (.srt) — from the subtitles inside it, from "
+                           "what is said (speech recognition), or from text burned into the picture — then "
+                           "translate it.")
         self._reset_button(layout, "translate")
         layout.addStretch(1)
 
