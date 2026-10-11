@@ -830,7 +830,8 @@ def cli(args):
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--to", default="", help="translate the subtitles into this language too (ar, fr…)")
     parser.add_argument("--translator", default="", choices=list(lens_translate.CHOICES),
-                        help="who translates (default: the one Lens uses)")
+                        help="who translates: google, bing, mymemory, deepl (needs your key, saved in Lens), "
+                             "nllb-600m, nllb-1.3b (default: the one Lens uses)")
     options = parser.parse_args(args)
     app = QGuiApplication.instance() or QGuiApplication(["EchoSubLens"])  # text recognition works on Qt images
     source = options.source
@@ -877,12 +878,16 @@ def _cli_translate(result, target, choice):
     if result.language == target or os.path.abspath(out) == os.path.abspath(result.path):
         return f"already in {languages.name(target)}, not translated"
     base_cfg = config.load()
-    key = lens_translate.resolve(choice or lens_app.load_config().get("translator", lens_translate.SAME), base_cfg)
+    saved = lens_app.load_config()
+    key = lens_translate.resolve(choice or saved.get("translator", lens_translate.SAME), base_cfg)
+    online = key in lens_translate.ONLINE
     device = "cpu"
-    if key != "google" and base_cfg.get("device", "cuda") != "cpu":
+    if not online and base_cfg.get("device", "cuda") != "cpu":
         cuda_libs.make_visible()
         device = "cuda" if cuda_libs.available() else "cpu"
-    translator = lens_translate.LensTranslator(key, device)
+    api_keys = saved.get("api_keys")  # the user's own keys (DeepL), saved on the Translator page
+    api_keys = dict(api_keys) if isinstance(api_keys, dict) else {}
+    translator = lens_translate.LensTranslator(key, device, api_keys=api_keys)
     started = time.monotonic()
     try:
         count = translate_srt(result.path, out, translator, target)
@@ -891,7 +896,7 @@ def _cli_translate(result, target, choice):
     finally:
         translator.release()
     backend = lens_translate.CHOICES.get(key, key).split(" — ")[0]
-    where = "online" if key == "google" else ("on the graphics card" if device == "cuda" else "on the processor")
+    where = "online" if online else ("on the graphics card" if device == "cuda" else "on the processor")
     text = (f"translated into {languages.name(target)} with {backend} ({where}): "
             f"{count} subtitles in {time.monotonic() - started:.1f} s -> {out}")
     log.info("Movie subtitles %s", text)

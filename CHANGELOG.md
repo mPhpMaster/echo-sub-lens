@@ -3,6 +3,12 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] — 2026-10-12
+
+### Added
+- **More online translators besides Google:** **Microsoft Bing Translator** (no account needed), **MyMemory** (no account; a limited amount of text a day) and **DeepL** (with your own free DeepL key, entered on the *Translator* page). They can be chosen for the screen, for files and for movies, in the Lens window, the menu and on the command line (`--translator bing`).
+- The *Translator* page groups the translators into online and offline (on this PC), with a line on each and a note on what online translators receive.
+
 ## [1.5.0] — 2026-10-12
 
 ### Added

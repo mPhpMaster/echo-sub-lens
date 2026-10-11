@@ -17,7 +17,7 @@ captions for anything your PC plays), released here as a project of its own. It 
 | | |
 |---|---|
 | ![Languages](docs/images/window-languages.png) | ![Translator](docs/images/window-translator.png) |
-| *Languages: what to translate into, and the language of the text on the screen* | *Translator: Google online, or NLLB offline on your graphics card* |
+| *Languages: what to translate into, and the language of the text on the screen* | *Translator: Google, Microsoft Bing, MyMemory or DeepL online, or NLLB offline on your graphics card* |
 | ![Appearance](docs/images/window-appearance.png) | ![Keyboard shortcuts](docs/images/window-shortcuts.png) |
 | *Appearance: font, size and colours, shown at once* | *A keyboard shortcut for every option* |
 | ![Translation window](docs/images/translation-window.png) | ![About](docs/images/window-about.png) |
@@ -58,8 +58,8 @@ The pictures are made by `scripts\screenshots.py`.
   **subtitles inside the movie** (text tracks as they are; Blu-ray and DVD picture subtitles read with Windows'
   text recognition), from **what is said** (speech recognition with Whisper, on your NVIDIA graphics card or the
   processor, any language), or from **text burned into the picture** (read twice a second). A progress bar shows
-  what it does and the time left. **Translate them into any language, with any translator** (Google online, or
-  NLLB offline on your graphics card): with *Translate them as soon as they are written* on, a second file
+  what it does and the time left. **Translate them into any language, with any translator** (Google, Microsoft
+  Bing, MyMemory or DeepL online, or NLLB offline on your graphics card): with *Translate them as soon as they are written* on, a second file
   (`Movie.ar.srt`) is saved next to the first — numbers and times kept, a two-line subtitle still two lines, each
   speaker of a dialogue on a line of their own with their dash. *Translate the subtitles…* opens them in the file
   translator, in the language and with the translator chosen.
@@ -100,12 +100,23 @@ The pictures are made by `scripts\screenshots.py`.
 
 - **Reading the screen:** Windows' own text recognition (Windows.Media.Ocr), on your PC and offline. To read another
   language, add it in *Settings → Time & language → Language* with its *Optical character recognition* feature.
-- **Translating:** NLLB-200 (offline, on your graphics card or processor) or Google Translate. *Default* follows
-  EchoSub's choice when EchoSub is installed (and shares its downloaded models); otherwise it is your Windows
-  language and Google Translate, which needs nothing downloaded. An NLLB model (about 600 MB or 1.3 GB) is
-  downloaded the first time you choose it. Only one translator is loaded at a time: choosing another one frees the
-  memory of the one before. Google gets every text of the screen in one request and answers each on its own; when
-  one of its services says "too many requests", Lens asks another, and only pauses for a few seconds if all refuse.
+- **Translating:** offline with NLLB-200 (on your graphics card or processor), or online with one of these:
+  - **Google Translate** — free, no key. Gets every text of the screen in one request and answers each on its own;
+    when one of its services says "too many requests", Lens asks another, and only pauses for a few seconds if all
+    refuse.
+  - **Microsoft Bing Translator** — free, no key (the same service as bing.com/translator). The lines of the screen
+    go together, up to 1000 characters a request, and each keeps its own translation.
+  - **MyMemory** (Translated srl) — free, no key and no sign-up, about 5000 characters a day; one request per text.
+    When the day's limit is used up Lens says so: choose another translator or wait until the next day.
+  - **DeepL** — needs your own key (free at [deepl.com/pro-api](https://www.deepl.com/pro-api), 500,000 characters a
+    month), added on the *Translator* page. Up to 50 texts in one request; a key that is not valid or a month's
+    quota used up is said in words.
+
+  *Default* follows EchoSub's choice when EchoSub is installed (and shares its downloaded models); otherwise it is
+  your Windows language and Google Translate, which needs nothing downloaded. An NLLB model (about 600 MB or 1.3 GB)
+  is downloaded the first time you choose it. Only one translator is loaded at a time: choosing another one frees the
+  memory of the one before. When an online service limits requests, Lens waits a few seconds (longer each time) and
+  asks again.
 - **Movies:** PyAV (FFmpeg's own libraries, no `ffmpeg.exe` needed) reads the movie, its sound and its subtitle
   tracks; speech is recognized by faster-whisper (Large v3 Turbo by default, shared with EchoSub's models) only where
   someone speaks; burned-in text is read with Windows OCR, and the same text on frames in a row becomes one subtitle.
@@ -147,8 +158,9 @@ The subtitles of a movie without opening a window — for a batch of movies, or 
 `burned` (text in the picture); without it Lens uses the subtitles inside the movie when there are some, else the
 speech. `--out` names the .srt file (default: next to the movie); a `.log` next to it says how it went.
 `--to LANG` translates the subtitles too, into `Movie.LANG.srt` next to them (subtitles already in that language
-are left as they are); `--translator` is `google`, `nllb-600m` or `nllb-1.3b` (offline, on the graphics card when
-there is one), or `same` — the default: the translator Lens uses.
+are left as they are); `--translator` is `google`, `bing`, `mymemory`, `deepl` (online; DeepL uses the key saved
+in Lens), `nllb-600m` or `nllb-1.3b` (offline, on the graphics card when there is one), or `same` — the default: the
+translator Lens uses.
 
 ## Build the installer
 
@@ -173,8 +185,10 @@ The tests need no OCR language, model or network.
 ## Privacy
 
 The picture of your screen never leaves your PC: it is read by Windows on your computer. With an NLLB translator
-nothing is sent anywhere. With Google Translate, the text Lens read is sent to Google to be translated, and
-Google's privacy policy applies. Lens keeps no history of what it read.
+nothing is sent anywhere. With an online translator, the text Lens read is sent to the service you chose to be
+translated — Google (Google Translate), Microsoft (Bing Translator), MyMemory (Translated srl) or DeepL — and that
+service's privacy policy applies. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
+settings file on your PC and sent only to DeepL. Lens keeps no history of what it read.
 
 ## Support the developer
 

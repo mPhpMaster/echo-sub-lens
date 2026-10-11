@@ -9,12 +9,12 @@ import os
 from PySide6.QtCore import QRect, QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel,
-                               QListWidget, QMessageBox, QPushButton, QRadioButton, QScrollArea, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QLineEdit, QListWidget, QMessageBox, QPushButton, QRadioButton, QScrollArea,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 from . import APP_NAME, __version__, config, languages, lens_follow, lens_ocr, lens_translate
 from .lens_about import ACCENT, AboutPage
-from .lens_menu import LANGUAGE_SETTINGS, PEEK_CHOICES, screen_label
+from .lens_menu import LANGUAGE_SETTINGS, PEEK_CHOICES, screen_label, translator_groups, translator_help
 from . import lens_shortcuts
 from .lens_shortcuts import ShortcutsPage
 from .lens_style import AppearancePage
@@ -23,15 +23,8 @@ PAGES = (("translate", "Translate"), ("languages", "Languages"), ("translator", 
          ("appearance", "Appearance"), ("shortcuts", "Keyboard shortcuts"), ("about", "About"))
 DEFAULT_SIZE = (860, 640)
 
-TRANSLATOR_HELP = {
-    lens_translate.SAME: "EchoSub's translator when EchoSub is on this PC; otherwise Google Translate.",
-    "google": "Online and fast. Uses no memory and no graphics card, but needs the internet and sends the text to "
-              "Google — which may slow down or refuse very many requests.",
-    "nllb-600m": "Offline, on your graphics card (or the processor). Private: nothing leaves your PC. "
-                 "About 600 MB, downloaded the first time you choose it.",
-    "nllb-1.3b": "Offline and more accurate, but slower and needs more memory. Private: nothing leaves your PC. "
-                 "About 1.3 GB, downloaded the first time you choose it.",
-}
+DEEPL_KEY_URL = "https://www.deepl.com/pro-api"
+PRIVACY_NOTE = "Online translators get the text Lens reads; offline ones keep everything on this PC."
 
 STYLE = f"""
 QWidget#lens_window, QWidget#page {{ background: #111615; }}
@@ -385,27 +378,73 @@ class LensWindow(QWidget):
     def _translator_page(self):
         layout = self._page("Translator", "Who translates the text Lens reads. Only one is in use at a time, so "
                                           "switching frees the memory of the one before.")
+        self.privacy_note = QLabel(PRIVACY_NOTE)
+        self.privacy_note.setObjectName("muted")
+        self.privacy_note.setWordWrap(True)
+        layout.addWidget(self.privacy_note)
+        layout.addSpacing(8)
         self.translators = QButtonGroup(self)
         self.translator_buttons = {}
-        for key, text in lens_translate.CHOICES.items():
-            button = QRadioButton(text)
-            self.translators.addButton(button)
-            self.translator_buttons[key] = button
-            button.clicked.connect(lambda _=False, key=key: self._changed(self.lens.set_translator, key))
-            layout.addWidget(button)
-            help_text = TRANSLATOR_HELP.get(key, "")
-            if key == lens_translate.SAME:
-                now = lens_translate.resolve(key, self.lens.base_cfg)
-                help_text += f" Here: {lens_translate.CHOICES[now]}."
-            self._help(layout, help_text)
-            layout.addSpacing(4)
+        self.translator_sections = []
+        for title, keys in translator_groups():
+            if title:
+                self._section(layout, title)
+                self.translator_sections.append(title)
+            for key in keys:
+                button = QRadioButton(lens_translate.CHOICES[key])
+                self.translators.addButton(button)
+                self.translator_buttons[key] = button
+                button.clicked.connect(lambda _=False, key=key: self._changed(self.lens.set_translator, key))
+                layout.addWidget(button)
+                help_text = translator_help(key)
+                if key == lens_translate.SAME:
+                    now = lens_translate.resolve(key, self.lens.base_cfg)
+                    help_text += f" Here: {lens_translate.CHOICES[now]}."
+                self._help(layout, help_text)
+                if key == "deepl":
+                    self._deepl_key(layout)
+                layout.addSpacing(4)
         self._section(layout, "This PC")
         self.device_label = QLabel(device_text(self.lens.base_cfg))
         self.device_label.setObjectName("muted")
         self.device_label.setWordWrap(True)
         layout.addWidget(self.device_label)
-        self._reset_button(layout, "translator")
+        reset = self._reset_button(layout, "translator")
+        reset.setToolTip("Back to the Default translator. Your DeepL key is kept.")
         layout.addStretch(1)
+
+    def _deepl_key(self, layout):
+        """Under DeepL: the user's own key (hidden as it is typed), a link to get one free, and Save."""
+        self.deepl_key = QLineEdit()
+        self.deepl_key.setEchoMode(QLineEdit.Password)
+        self.deepl_key.setPlaceholderText("Paste your DeepL key here")
+        self.deepl_key.setMinimumWidth(320)
+        self.deepl_key.setText(self.lens.cfg.get("api_keys", {}).get("deepl", ""))
+        self.show_key = QPushButton("Show")
+        self.show_key.setCheckable(True)
+        self.show_key.setToolTip("Show or hide the key")
+        self.show_key.toggled.connect(self._show_key)
+        self.save_key = QPushButton("Save the key")
+        self.save_key.setToolTip("Keep the key in Lens's settings on this PC; DeepL uses it from now on")
+        self.save_key.clicked.connect(self.save_deepl_key)
+        self.deepl_key.returnPressed.connect(self.save_deepl_key)
+        get_key = QPushButton("Get a free key…")
+        get_key.setObjectName("flat")
+        get_key.setCursor(Qt.PointingHandCursor)
+        get_key.setToolTip(DEEPL_KEY_URL)
+        get_key.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DEEPL_KEY_URL)))
+        line = self._row(QLabel("DeepL key"), self.deepl_key, self.show_key, self.save_key)
+        line.setContentsMargins(28, 0, 0, 0)
+        layout.addWidget(line)
+        layout.addWidget(self._row(get_key))
+
+    def _show_key(self, shown):
+        self.deepl_key.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
+        self.show_key.setText("Hide" if shown else "Show")
+
+    def save_deepl_key(self):
+        self.lens.set_api_key("deepl", self.deepl_key.text())
+        self.deepl_key.setText(self.lens.cfg["api_keys"].get("deepl", ""))
 
     def _appearance_page(self):
         layout = self._page("Appearance", "How the translations look over the screen. Every change shows at once.")

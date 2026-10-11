@@ -157,7 +157,7 @@ class TranslateCuesTest(unittest.TestCase):
             movie.write_srt([Cue(0, 1, "Hi")], out_path)
             return movie.Result(out_path, 1, language="en")
 
-        def translator(key, device):
+        def translator(key, device, api_keys=None):
             made.append(FakeTranslator(key))
             return made[-1]
 

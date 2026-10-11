@@ -43,6 +43,7 @@ DEFAULTS = {
     "text_window_settings": None,  # its place, size, font size and "original text too"
     "overlay_visible": True,     # the translations over the screen (turned off from the translation window)
     "window_geometry": None,     # [x, y, w, h] of the EchoSub Lens window (a click on the tray icon opens it)
+    "api_keys": {"deepl": ""},   # the user's own keys for online translators that need one (Translator page)
 }
 
 
@@ -61,6 +62,8 @@ def load_config():
     from .lens_style import merged
 
     cfg["style"] = merged(cfg["style"])
+    saved_keys = cfg["api_keys"] if isinstance(cfg["api_keys"], dict) else {}
+    cfg["api_keys"] = {**DEFAULTS["api_keys"], **{k: str(v or "") for k, v in saved_keys.items()}}  # new ones too
     if cfg["interval_ms"] == OLD_INTERVAL_MS:  # the old default, saved with every setting: now quicker
         cfg["interval_ms"] = DEFAULTS["interval_ms"]
     if cfg["peek_seconds"] == OLD_PEEK_SECONDS:

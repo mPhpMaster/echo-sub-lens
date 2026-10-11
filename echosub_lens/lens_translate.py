@@ -23,8 +23,23 @@ SAME = "same"            # the default: EchoSub's translator when EchoSub is on 
 CHOICES = {
     SAME: "Default",
     "google": config.TRANSLATORS["google"],
+    "bing": "Microsoft Bing Translator — online",
+    "mymemory": "MyMemory — online, limited per day",
+    "deepl": "DeepL — online, needs your free key",
     "nllb-600m": config.TRANSLATORS["nllb-600m"],
     "nllb-1.3b": config.TRANSLATORS["nllb-1.3b"],
+}
+ONLINE = {"google", "bing", "mymemory", "deepl"}  # the text read is sent to the service
+NEEDS_KEY = {"deepl"}    # translators that work only with the user's own key (saved in api_keys)
+HELP = {
+    SAME: "The translator EchoSub uses when EchoSub is on this PC, else Google Translate.",
+    "google": "Google Translate: free, no key, many languages; the text is sent to Google.",
+    "bing": "Microsoft Bing Translator: free, no key, many languages; the text is sent to Microsoft.",
+    "mymemory": "MyMemory: free, no key, about 5000 characters a day; the text is sent to MyMemory (Translated).",
+    "deepl": "DeepL: very natural translations; needs your own key (free at deepl.com, 500,000 characters "
+             "a month); the text is sent to DeepL.",
+    "nllb-600m": "NLLB 600M: offline on this PC, nothing is sent anywhere; a one-time download, fast.",
+    "nllb-1.3b": "NLLB 1.3B: offline on this PC, nothing is sent anywhere; a bigger download, more accurate.",
 }
 
 
@@ -46,10 +61,12 @@ def already_in(text, target):
 class LensTranslator:
     """`translate_many(texts, target)` -> translations in the same order. Thread-safe, loads lazily."""
 
-    def __init__(self, key, device="cuda", factory=translate.create):
+    def __init__(self, key, device="cuda", factory=translate.create, api_keys=None):
+        """`api_keys`: the user's own keys ({"deepl": "..."}), given to the factory when there are some."""
         self.key = key
         self._device = device
         self._factory = factory
+        self._api_keys = api_keys
         self._backend = None
         self._lock = threading.Lock()
         self._cache = OrderedDict()
@@ -59,7 +76,10 @@ class LensTranslator:
             device = self._device
             if device == "vulkan":
                 device = "cuda"
-            self._backend = self._factory(self.key, device)
+            if self._api_keys is not None:
+                self._backend = self._factory(self.key, device, api_keys=self._api_keys)
+            else:
+                self._backend = self._factory(self.key, device)
         return self._backend
 
     def release(self):
@@ -92,8 +112,8 @@ class LensTranslator:
             if todo:
                 backend = self._get_backend()
                 progress(0, len(todo))
-                if isinstance(backend, translate.GoogleTranslator):
-                    results = self._google(backend, todo, target, progress)
+                if getattr(backend, "online", False):  # Google, Bing, MyMemory, DeepL
+                    results = self._online(backend, todo, target, progress)
                 elif hasattr(backend, "translate_many"):  # NLLB: many texts per pass over the model
                     # A graphics card does the whole screen in one pass fastest; the processor is slow
                     # enough that showing progress batch by batch is worth a little time
@@ -142,13 +162,16 @@ class LensTranslator:
         return True
 
     @staticmethod
-    def _google(backend, texts, target, progress=lambda done, total: None):
-        """Many texts per request, each translated on its own (never two lines run into one)."""
+    def _online(backend, texts, target, progress=lambda done, total: None):
+        """An online translator: many texts per call, each translated on its own (never two lines run into
+        one); the backend splits a chunk further when its service takes less per request."""
         results = []
         for chunk in _chunks(texts, GOOGLE_CHUNK):
             results.extend(backend.translate_many(chunk, "auto", target))
             progress(len(results), len(texts))
         return results
+
+    _google = _online  # its name before Bing, MyMemory and DeepL
 
 
 def _digits(text):

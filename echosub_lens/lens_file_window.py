@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QMes
                                QProgressBar, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from . import languages, lens_files, lens_ocr, lens_translate
+from .lens_menu import fill_translator_combo
 
 log = logging.getLogger(__name__)
 
@@ -136,18 +137,15 @@ class FileWindow(QWidget):
         row.addSpacing(16)
         row.addWidget(QLabel("with"))
         self.translator_combo = QComboBox()
-        for key, label in lens_translate.CHOICES.items():
-            self.translator_combo.addItem(label, key)
-            self.translator_combo.setItemData(self.translator_combo.count() - 1, TRANSLATOR_HINTS.get(key, label),
-                                              Qt.ToolTipRole)
+        fill_translator_combo(self.translator_combo, TRANSLATOR_HINTS)
         index = self.translator_combo.findData(self.translator_choice)
         self.translator_combo.setCurrentIndex(max(index, 0))
         if self._choose_translator is None:
             self.translator_combo.setEnabled(False)
             self.translator_combo.setToolTip("The translator Lens uses")
         else:
-            self.translator_combo.setToolTip("The translator: Google is online and fast, NLLB works offline "
-                                             "on the graphics card")
+            self.translator_combo.setToolTip("The translator: the online ones (Google, Bing, MyMemory, DeepL) get "
+                                             "the text; NLLB works offline on the graphics card")
         self.translator_combo.currentIndexChanged.connect(self._translator_chosen)
         row.addWidget(self.translator_combo)
         row.addStretch(1)

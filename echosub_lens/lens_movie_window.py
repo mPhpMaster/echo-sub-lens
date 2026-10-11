@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFileDialog, 
                                QMessageBox, QProgressBar, QPushButton, QRadioButton, QVBoxLayout, QWidget)
 
 from . import config, languages, lens_ocr, lens_translate, movie
+from .lens_menu import fill_translator_combo
 from .lens_window import STYLE
 
 log = logging.getLogger(__name__)
@@ -163,13 +164,10 @@ class MovieWindow(QWidget):
         self.target_box.setCurrentIndex(self.target_box.findData(target))
         self.target_box.currentIndexChanged.connect(lambda _: self._update())
         self.translator_box = QComboBox()
-        for key, label in lens_translate.CHOICES.items():
-            self.translator_box.addItem(label, key)
-            self.translator_box.setItemData(self.translator_box.count() - 1, TRANSLATOR_HINTS.get(key, label),
-                                            Qt.ToolTipRole)
+        fill_translator_combo(self.translator_box, TRANSLATOR_HINTS)
         self.translator_box.setCurrentIndex(max(0, self.translator_box.findData(self.lens.cfg.get("translator"))))
-        self.translator_box.setToolTip("Google is online and fast; NLLB works offline on your graphics card, "
-                                       "and nothing leaves your PC")
+        self.translator_box.setToolTip("Online translators (Google, Bing, MyMemory, DeepL) are fast and get the text; "
+                                       "NLLB works offline on your graphics card, and nothing leaves your PC")
         layout.addWidget(self._row(QLabel("Translate into"), self.target_box, QLabel("with"), self.translator_box))
         self.translate_after = QCheckBox("Translate them as soon as they are written")
         self.translate_after.setChecked(True)

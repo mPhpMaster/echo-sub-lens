@@ -6,7 +6,7 @@ import os
 import threading
 import time
 
-from PySide6.QtCore import QRect, QTimer
+from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QSystemTrayIcon
 
@@ -23,6 +23,15 @@ from .languages import QUICK_TARGETS
 log = logging.getLogger(__name__)
 
 MOUSE_INTERVAL_MS = 250  # the lens looks more often: it is small, and the pointer has just stopped
+
+
+class MissingKey(RuntimeError):
+    """The translator chosen needs the user's own key (DeepL), and none was saved."""
+
+
+class _KeyRequest(QObject):
+    """From the thread that loads a translator to the Qt thread: a key is needed (opens the Translator page)."""
+    needed = Signal(str)
 
 
 def lens_icon(active):
@@ -85,6 +94,10 @@ class LensApp(LensMenuMixin):
         self.scanner.progress.connect(
             lambda text, percent: self.scanner._busy and self.activity.say("screen", text, percent))
         self._translators = {}
+        self._key_request = _KeyRequest()
+        self._key_request.needed.connect(self._ask_for_key)
+        self._asked_for_key = set()  # asked once; again after the key or the translator changes
+        self._stopped_for_key = False
         self.hotkeys = hotkeys.GlobalHotkeys()
         self.mouse_timer = QTimer()
         self.mouse_timer.setInterval(60)
@@ -201,15 +214,22 @@ class LensApp(LensMenuMixin):
         self.activity.say("translator", f"Loading the translator ({name})…")
         downloader = downloads.ModelDownloader(on_event=self._download_event)
         try:
+            if self.missing_key(key):
+                self._key_request.needed.emit(key)  # the note and the Translator page, in the Qt thread
+                raise MissingKey(self._key_note(key))
             if key == "google":  # no offline model waiting in the memory: Google alone
                 backend = translate.GoogleTranslator()
-                backend.notify = self.activity.tell
             else:
-                backend = translate.create(key, device, downloader=downloader, fast_cpu=fast_cpu)
+                backend = translate.create(key, device, downloader=downloader, fast_cpu=fast_cpu,
+                                           api_keys=dict(self.cfg.get("api_keys") or {}))
+            if hasattr(backend, "notify"):
+                backend.notify = self.activity.tell
             where = {"cuda": " on the graphics card", "cpu": " on the processor"}.get(
                 getattr(backend, "device", ""), "")
             self.activity.tell(f"Translator ready: {name}{where}")
             return backend
+        except MissingKey:
+            raise
         except Exception as e:
             self.activity.tell(f"Could not load the translator ({name}): {e}")
             raise
@@ -218,7 +238,49 @@ class LensApp(LensMenuMixin):
 
     @staticmethod
     def _translator_name(key):
-        return config.TRANSLATORS.get(key, key).split(" — ")[0]
+        return (config.TRANSLATORS.get(key) or lens_translate.CHOICES.get(key) or key).split(" — ")[0]
+
+    # ---- translators that need the user's own key (DeepL) ------------------------
+    def missing_key(self, key):
+        """True when the translator `key` needs the user's key and none was saved."""
+        needs = getattr(lens_translate, "NEEDS_KEY", ())
+        return key in needs and not str((self.cfg.get("api_keys") or {}).get(key) or "").strip()
+
+    def _key_note(self, key):
+        return f"{self._translator_name(key)} needs your key: open Translator settings"
+
+    def _ask_for_key(self, key):
+        """A translator was chosen without its key: say so, and open the page where the key is typed — once
+        for each choice, not every time a text is translated."""
+        if key in self._asked_for_key or not self.missing_key(key):
+            return
+        self._asked_for_key.add(key)
+        self._notify(self._key_note(key))
+        self.open_window("translator")
+
+    def set_api_key(self, service, key):
+        """Save the user's key for `service` (e.g. "deepl"); a translator of that service already loaded is
+        switched off, so the next text is translated with the new key."""
+        key = (key or "").strip()
+        keys = dict(self.cfg.get("api_keys") or {})
+        if keys.get(service, "") == key:
+            self._notify(f"{self._translator_name(service)} key saved" if key else
+                         f"No {self._translator_name(service)} key")
+            return
+        keys[service] = key
+        self._set(api_keys=keys)
+        self._asked_for_key.discard(service)
+        if service in self._translators:  # a new one, with the new key (and no translations kept from before)
+            self._switch_off(service, self._translators.pop(service))
+        self._notify(f"{self._translator_name(service)} key saved" if key else
+                     f"{self._translator_name(service)} key removed")
+        if lens_translate.resolve(self.cfg["translator"], self.base_cfg) != service:
+            return
+        if self.scanner.running:
+            self.scanner.restart()
+            self.start()  # the new translator, with the new key
+        elif self._stopped_for_key and key:
+            self.start()  # stopped only for want of the key
 
     def _switch_off(self, key, translator):
         """A translator no longer used lets go of its model, in the background (it may be translating)."""
@@ -249,9 +311,15 @@ class LensApp(LensMenuMixin):
         self._notify(f"Translating into {languages.name(self.target)}")
 
     def set_translator(self, key):
+        self._asked_for_key.clear()  # chosen again: say again if its key is missing
+        self._notify(f"Translator: {lens_translate.CHOICES[key]}")  # first: a missing key is said after it
         self._set_and_restart(translator=key)
         self.translator()  # switches the one used before off now, not when Lens starts again
-        self._notify(f"Translator: {lens_translate.CHOICES[key]}")
+        needed = lens_translate.resolve(key, self.base_cfg)
+        if self.missing_key(needed):
+            self._ask_for_key(needed)
+        elif self._stopped_for_key:  # stopped for a missing key, and another translator chosen: go on
+            self.start()
 
     def set_ocr_language(self, tag):
         self._set_and_restart(ocr_language=tag)
@@ -472,6 +540,15 @@ class LensApp(LensMenuMixin):
     def start(self):
         if self.picker is not None:
             return
+        key = lens_translate.resolve(self.cfg["translator"], self.base_cfg)
+        if self.missing_key(key):  # nothing to translate with: the note and the Translator page instead
+            if self.scanner.running:
+                self.stop()
+            self._stopped_for_key = True
+            self._ask_for_key(key)
+            self._update_state()
+            return
+        self._stopped_for_key = False
         mouse = self.cfg["mode"] == "mouse"
         if mouse:
             self._anchor = QCursor.pos()
@@ -487,6 +564,7 @@ class LensApp(LensMenuMixin):
         self._update_state()
 
     def stop(self):
+        self._stopped_for_key = False
         self.scanner.stop()
         self.mouse_timer.stop()
         self.activity.say("screen")
@@ -499,8 +577,10 @@ class LensApp(LensMenuMixin):
             self.stop()
             self._notify("Translation stopped")
         else:
+            self._asked_for_key.clear()  # started by hand: say again if a key is missing
             self.start()
-            self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
+            if self.scanner.running:
+                self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
 
     def _where(self):
         _, rect = self.area()

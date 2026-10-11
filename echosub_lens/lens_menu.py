@@ -13,6 +13,50 @@ PEEK_CHOICES = ((0, "Never"), (1, "Every second"), (2, "Every 2 seconds"), (5, "
 LANGUAGE_SETTINGS = "ms-settings:regionlanguage"
 
 
+ONLINE_TRANSLATORS = ("google", "bing", "mymemory", "deepl")
+TRANSLATOR_HELP = {  # used until lens_translate.HELP has a line for the key
+    lens_translate.SAME: "EchoSub's translator when EchoSub is on this PC; otherwise Google Translate.",
+    "google": "Online and fast. Uses no memory and no graphics card, but needs the internet and sends the text to "
+              "Google — which may slow down or refuse very many requests.",
+    "bing": "Online, from Microsoft. Needs the internet and sends the text to Microsoft.",
+    "mymemory": "Online and free, but only a limited amount of text per day. Sends the text to MyMemory.",
+    "deepl": "Online and very natural. Needs your own free DeepL key (below) and sends the text to DeepL.",
+    "nllb-600m": "Offline, on your graphics card (or the processor). Private: nothing leaves your PC. "
+                 "About 600 MB, downloaded the first time you choose it.",
+    "nllb-1.3b": "Offline and more accurate, but slower and needs more memory. Private: nothing leaves your PC. "
+                 "About 1.3 GB, downloaded the first time you choose it.",
+}
+
+
+def translator_help(key):
+    """One line on what the translator `key` is."""
+    return getattr(lens_translate, "HELP", {}).get(key) or TRANSLATOR_HELP.get(key, "")
+
+
+def translator_groups():
+    """[(title, [keys])] of lens_translate.CHOICES: Default alone, then the online ones, then the offline ones."""
+    keys = list(lens_translate.CHOICES)
+    online = [k for k in keys if k in ONLINE_TRANSLATORS]
+    offline = [k for k in keys if k != lens_translate.SAME and k not in ONLINE_TRANSLATORS]
+    groups = [("", [lens_translate.SAME])] if lens_translate.SAME in keys else []
+    return groups + [(title, group) for title, group in (("Online", online), ("Offline, on this PC", offline))
+                     if group]
+
+
+def fill_translator_combo(combo, hints=None):
+    """The translators in a QComboBox (data: the key), the groups apart, each with a tooltip."""
+    from PySide6.QtCore import Qt
+
+    hints = hints or {}
+    for _, keys in translator_groups():
+        if combo.count():
+            combo.insertSeparator(combo.count())
+        for key in keys:
+            combo.addItem(lens_translate.CHOICES[key], key)
+            combo.setItemData(combo.count() - 1, hints.get(key) or translator_help(key) or
+                              lens_translate.CHOICES[key], Qt.ToolTipRole)
+
+
 def screen_label(index, screen):
     size = screen.size()
     return f"Screen {index + 1} — {screen.name()} ({size.width()} × {size.height()})"
@@ -65,8 +109,12 @@ class LensMenuMixin:
         self._choice_menu(m, "Translate into", self._target_choices(), lambda: self.cfg["target_lang"] or "",
                           lambda code: self.set_target(code or None))
         self._build_language_menu(m)
-        self._choice_menu(m, "Translator", list(lens_translate.CHOICES.items()), lambda: self.cfg["translator"],
-                          self.set_translator)
+        choices = []
+        for _, keys in translator_groups():
+            if choices:
+                choices.append(("", ""))  # a line between Default, the online and the offline translators
+            choices += [(key, lens_translate.CHOICES[key]) for key in keys]
+        self._choice_menu(m, "Translator", choices, lambda: self.cfg["translator"], self.set_translator)
         m.addSeparator()
 
         self.act_text_window = self._item(m, "Translation window (the text in a box, above all windows)",
@@ -161,13 +209,17 @@ class LensMenuMixin:
         menu.addAction("Add a language to read…", lambda: QDesktopServices.openUrl(QUrl(LANGUAGE_SETTINGS)))
 
     def _choice_menu(self, parent, title, choices, current, choose):
-        """A submenu of radio items; a (None, None) choice starts a "More" submenu for the rest."""
+        """A submenu of radio items; a (None, None) choice starts a "More" submenu for the rest, a ("", "") one
+        is a line between items."""
         menu = parent.addMenu(title)
         group = QActionGroup(menu)
         target = menu
         for value, text in choices:
             if value is None and text is None:
                 target = menu.addMenu("More languages")
+                continue
+            if value == "" and text == "":
+                target.addSeparator()
                 continue
             a = QAction(text, target, checkable=True, checked=current() == value)
             a.triggered.connect(lambda _=False, v=value: choose(v))
