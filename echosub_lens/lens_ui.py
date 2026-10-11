@@ -44,13 +44,13 @@ class LensApp(LensMenuMixin):
     def __init__(self, qt, cfg, save, base_cfg=None):
         self.qt = qt
         self.cfg = cfg
+        self.main_window = None      # the EchoSub Lens window: a click on the tray icon opens it
         self._save = save
         self.base_cfg = base_cfg if base_cfg is not None else config.load()  # the defaults
         self.keys = lens_shortcuts.merged(cfg.get("shortcuts"))
         self.picker = None
         self._mouse_area = None      # (QScreen, QRect) of the lens around the mouse
         self._anchor = None          # where the pointer was when the lens was last placed
-        self.settings_window = None
         self.file_windows = []
         self.text_window = None
         self._save_text_window = QTimer()
@@ -116,7 +116,7 @@ class LensApp(LensMenuMixin):
             "text_window": lambda: self.act_text_window.toggle(),
             "capture": lambda: self.act_capture.toggle(),
             "appearance": lambda: self.open_settings("appearance"),
-            "settings": lambda: self.open_settings("shortcuts"),
+            "settings": lambda: self.open_window(),
             "quit": self.quit,
         }
 
@@ -151,6 +151,8 @@ class LensApp(LensMenuMixin):
             self._save(self.cfg)
         except OSError:
             log.exception("Could not save the Lens settings")
+        if self.main_window is not None and self.main_window.isVisible():
+            self.main_window.refresh()  # a key or the tray menu changed it: the window shows it too
 
     def translator(self):
         key = lens_translate.resolve(self.cfg["translator"], self.base_cfg)
@@ -225,6 +227,20 @@ class LensApp(LensMenuMixin):
         self.translator()  # switches the one used before off now, not when Lens starts again
         self._notify(f"Translator: {lens_translate.CHOICES[key]}")
 
+    def set_ocr_language(self, tag):
+        self._set_and_restart(ocr_language=tag)
+        self._notify("Reading the screen in your Windows display languages" if tag == "auto"
+                     else f"Reading the screen in {tag}")
+
+    def set_select_mode(self, on):
+        self._set(select_mode=on)
+        if hasattr(self, "act_select"):
+            self.act_select.blockSignals(True)
+            self.act_select.setChecked(on)
+            self.act_select.blockSignals(False)
+        self._notify("Select mode on: translations take the mouse" if on
+                     else "Select mode off: hold Ctrl to select a translation")
+
     def next_language(self):
         order = [""] + QUICK_TARGETS
         current = self.cfg["target_lang"] or ""
@@ -282,6 +298,18 @@ class LensApp(LensMenuMixin):
             return
         screen, rect = result
         self._set(mode="area", screen=screen.name(), area=[rect.x(), rect.y(), rect.width(), rect.height()])
+        self._fill_screens()
+        self._sync_mouse_item()
+        self.start()
+        self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
+
+    def use_area(self):
+        """The area chosen last time again, or a new one when there is none yet."""
+        if not self.cfg["area"]:
+            self.choose_area()
+            return
+        self._set(mode="area")
+        self._mouse_area = self._anchor = None
         self._fill_screens()
         self._sync_mouse_item()
         self.start()
@@ -418,6 +446,8 @@ class LensApp(LensMenuMixin):
             self.cfg["mode"], f"an area of {rect.width()} × {rect.height()}")
         state = f"translating {where} into {languages.name(self.target)}" if running else "stopped"
         self.tray.setToolTip(f"{LENS_NAME} — {state}")
+        if self.main_window is not None and self.main_window.isVisible():
+            self.main_window.refresh_state()
 
     def _show(self, blocks):
         if self.cfg["overlay_visible"]:
@@ -487,13 +517,23 @@ class LensApp(LensMenuMixin):
 
     # ---- tray ----------------------------------------------------------------
     def _tray_activated(self, reason):
-        if reason == QSystemTrayIcon.Trigger:
-            self.toggle()
+        """A click on the icon opens the window (the right-click menu and Ctrl+Alt+T start and stop)."""
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.open_window()
 
     def already_running(self):
-        self.tray.showMessage(LENS_NAME, "Lens is already running — its icon is by the clock. "
-                                         "Click it to start or stop; right-click for the menu.",
-                              QSystemTrayIcon.Information, 5000)
+        """Lens was opened again while it runs: show its window."""
+        self.open_window()
+
+    def open_window(self, page=None):
+        """The EchoSub Lens window, in front, on `page` (translate, languages, translator, appearance,
+        shortcuts, about) or where it was."""
+        if self.main_window is None:
+            from .lens_window import LensWindow
+
+            self.main_window = LensWindow(self)
+        self.main_window.present(page)
+        return self.main_window
 
     # ---- files ---------------------------------------------------------------
     def open_file(self, path=None):
@@ -518,28 +558,16 @@ class LensApp(LensMenuMixin):
         window.show()
         return window
 
-    # ---- settings window and screen sharing --------------------------------------
+    # ---- settings and screen sharing ----------------------------------------------
     def open_settings(self, tab="appearance"):
-        from .lens_settings import LensSettings
-
-        if self.settings_window is not None:
-            self.settings_window.show_tab(tab)
-            self.settings_window.raise_()
-            self.settings_window.activateWindow()
-            return
-        self.settings_window = LensSettings(self.cfg["style"], self.keys, self.apply_style, self.apply_keys, tab)
-        self.settings_window.finished.connect(self._settings_closed)
-        self.settings_window.show()
+        """The window, on the Appearance or the Keyboard shortcuts page."""
+        return self.open_window(tab)
 
     def apply_style(self, style):
         self.overlay.set_style(style)
         self._set(style=self.overlay.style)
         for window in self.file_windows:
             window.restyle(self.overlay.style)
-
-    def _settings_closed(self, _result):
-        self.settings_window.deleteLater()
-        self.settings_window = None
 
     def _set_capture_visible(self, visible):
         self._set(capture_visible=visible)
@@ -564,5 +592,7 @@ class LensApp(LensMenuMixin):
             self.text_window.close()
         for window in list(self.file_windows):
             window.close()
+        if self.main_window is not None:
+            self.main_window.hide()  # keeps its place for next time
         self.tray.hide()
         self.qt.quit()

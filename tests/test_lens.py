@@ -68,14 +68,12 @@ class GroupingTest(unittest.TestCase):
 
 
 class FakeGoogle(translate.GoogleTranslator):
-    def __init__(self, merge=False):  # no deep_translator, no network
+    def __init__(self):  # no deep_translator, no network
         self.calls = []
-        self.merge = merge
 
-    def translate(self, text, src, tgt):
-        self.calls.append(text)
-        lines = [f"<{t}>" for t in text.split("\n")]
-        return " ".join(lines) if self.merge and len(lines) > 1 else "\n".join(lines)
+    def translate_many(self, texts, src, tgt):
+        self.calls.append(list(texts))
+        return [f"<{t}>" for t in texts]
 
 
 class FakeOffline:
@@ -92,13 +90,7 @@ class TranslatorTest(unittest.TestCase):
         backend = FakeGoogle()
         t = lens_translate.LensTranslator("google", factory=lambda key, device: backend)
         self.assertEqual(t.translate_many(["a", "b", "a"], "ar"), ["<a>", "<b>", "<a>"])
-        self.assertEqual(backend.calls, ["a\nb"])
-
-    def test_when_google_merges_lines_each_is_asked_alone(self):
-        backend = FakeGoogle(merge=True)
-        t = lens_translate.LensTranslator("google", factory=lambda key, device: backend)
-        self.assertEqual(t.translate_many(["a", "b"], "ar"), ["<a>", "<b>"])
-        self.assertEqual(backend.calls, ["a\nb", "a", "b"])
+        self.assertEqual(backend.calls, [["a", "b"]])
 
     def test_progress_is_reported_for_new_text_only(self):
         class Batches(FakeOffline):

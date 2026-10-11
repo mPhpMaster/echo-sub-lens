@@ -102,6 +102,14 @@ def split_columns(line, gap_factor=2.2):
     return parts
 
 
+DASHES = "-–—‐−"
+
+
+def spoken_line(text):
+    """A subtitle line that starts with a dash: one person of a dialogue speaks, never joined to the line above."""
+    return text.lstrip()[:1] in DASHES and len(text.strip()) > 1
+
+
 def group_blocks(lines):
     """Join lines that read as one paragraph: same size, close below each other, overlapping sideways."""
     pieces = sorted((part for line in lines if line.words for part in split_columns(line)),
@@ -109,6 +117,9 @@ def group_blocks(lines):
     blocks = []
     for line in pieces:
         box = line.box
+        if spoken_line(line.text):
+            blocks.append(Block([line]))
+            continue
         for block in reversed(blocks[-8:]):  # only blocks just above can continue
             last = block.lines[-1].box
             height = block.line_height

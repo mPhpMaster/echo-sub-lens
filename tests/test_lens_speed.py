@@ -76,31 +76,47 @@ class SimilarTextTest(unittest.TestCase):
 
 class GoogleTest(unittest.TestCase):
     def test_lines_google_merged_are_asked_again_in_halves_not_one_by_one(self):
+        g = translate.GoogleTranslator()
         asked = []
 
-        class Merging:
-            def translate(self, text, src, tgt):
-                asked.append(text)
-                lines = text.split("\n")
-                return " ".join(lines) if len(lines) == 4 else text.upper()
+        def ask(text, key):
+            asked.append(text)
+            lines = text.split("\n")
+            return " ".join(lines) if len(lines) == 4 else text.upper()
 
-        out = lens_translate.LensTranslator._google(Merging(), ["a", "b", "c", "d"], "ar")
-        self.assertEqual(out, ["A", "B", "C", "D"])
+        g._ask = ask
+        self.assertEqual(g._ask_lines(["a", "b", "c", "d"], "ar"), ["A", "B", "C", "D"])
         self.assertEqual(len(asked), 3)
 
-    def test_the_json_service_is_used_and_a_429_counts_as_too_many_requests(self):
+    def test_chromes_service_answers_each_text_on_its_own_in_one_request(self):
+        g = translate.GoogleTranslator()
+        g.MIN_INTERVAL = 0.0
+        reply = mock.Mock(status_code=200)
+        reply.json.return_value = [["- إلى أين؟", "en"], ["- إلى البيت.", "en"]]
+        g._session = mock.Mock()
+        g._session.post.return_value = reply
+        self.assertEqual(g.translate_many(["- Where to?", "- Home."], "auto", "ar"), ["- إلى أين؟", "- إلى البيت."])
+        self.assertEqual(g._session.post.call_count, 1)
+        self.assertEqual(g._session.post.call_args.args[0], translate.MANY_URL)
+        self.assertEqual(g._session.post.call_args.kwargs["data"], [("q", "- Where to?"), ("q", "- Home.")])
+        reply.json.return_value = ["مرحبا", "en"]  # one text: answered without the list around it
+        self.assertEqual(g.translate("Hello", "auto", "ar"), "مرحبا")
+
+    def test_when_one_service_refuses_another_is_asked_and_a_429_everywhere_pauses(self):
         g = translate.GoogleTranslator()
         g.MIN_INTERVAL = 0.0
         g.RETRY_DELAYS = ()
-        reply = mock.Mock(status_code=200)
-        reply.json.return_value = [[["مرحبا\n", "Hello\n"], ["عالم", "world"]], None, "en"]
+        refused = mock.Mock(status_code=429)
+        json_reply = mock.Mock(status_code=200)
+        json_reply.json.return_value = [[["مرحبا\n", "Hello\n"], ["عالم", "world"]], None, "en"]
         g._session = mock.Mock()
-        g._session.post.return_value = reply
-        self.assertEqual(g.translate("Hello\nworld", "auto", "ar"), "مرحبا\nعالم")
-        self.assertEqual(g._session.post.call_args.kwargs["data"], {"q": "Hello\nworld"})
-        reply.status_code = 429
+        g._session.post.side_effect = lambda url, **kw: refused if url == translate.MANY_URL else json_reply
+        self.assertEqual(g.translate_many(["Hello", "world"], "auto", "ar"), ["مرحبا", "عالم"])
+        g._session.post.side_effect = None
+        g._session.post.return_value = refused
         with self.assertRaises(translate.RateLimited):
             g.translate("Hello", "auto", "ar")
+        self.assertLessEqual(translate.GoogleTranslator.COOLDOWN[0], 5.0)  # a short pause, not 20 s
 
     def test_a_broken_json_service_falls_back_to_the_web_page(self):
         g = translate.GoogleTranslator()
@@ -112,6 +128,36 @@ class GoogleTest(unittest.TestCase):
         g._cls = lambda source, target: page
         self.assertEqual(g.translate("Hello", "auto", "ar"), "مرحبا")
         self.assertTrue(g._web_only)
+
+
+def subtitle_line(text, y):
+    return Line([(word, Box(100 + 60 * i, y, 55, 30)) for i, word in enumerate(text.split())])
+
+
+class SubtitleTest(unittest.TestCase):
+    def test_each_speaker_of_a_dialogue_is_a_text_of_its_own(self):
+        blocks = lens_ocr.group_blocks([subtitle_line("- Where are you going?", 600),
+                                        subtitle_line("- Home.", 634)])
+        self.assertEqual([b.text for b in blocks], ["- Where are you going?", "- Home."])
+        # one sentence over two lines is still one text
+        blocks = lens_ocr.group_blocks([subtitle_line("but some of us here", 600),
+                                        subtitle_line("to learn to learn.", 634)])
+        self.assertEqual(len(blocks), 1)
+
+    def test_a_dialogue_line_keeps_its_dash(self):
+        rtl = lens_scanner.RLM  # puts the dash on the right of an Arabic line
+        self.assertEqual(lens_scanner.keep_dash("- Home.", "إلى البيت."), rtl + "- إلى البيت.")
+        self.assertEqual(lens_scanner.keep_dash("- Home.", "- إلى البيت."), rtl + "- إلى البيت.")
+        self.assertEqual(lens_scanner.keep_dash("- Home.", "- Maison."), "- Maison.")
+        self.assertEqual(lens_scanner.keep_dash("- Home.", "Maison."), "- Maison.")
+        self.assertEqual(lens_scanner.keep_dash("Home.", "البيت."), "البيت.")
+
+    def test_two_lines_stay_two_lines(self):
+        from echosub_lens.lens_overlay import split_like
+
+        self.assertEqual(split_like("لقد جعلتها متوافقة تماماً مع النظام الجديد يا رجل", 2).count("\n"), 1)
+        self.assertEqual(split_like("مرحبا", 2), "مرحبا")
+        self.assertEqual(split_like("سطر\nسطر", 2), "سطر\nسطر")
 
 
 class GarbageTest(unittest.TestCase):

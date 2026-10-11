@@ -141,27 +141,14 @@ class LensTranslator:
         self._remember((target, text), self._cache[(target, match[0])])
         return True
 
-    @classmethod
-    def _google(cls, backend, texts, target, progress=lambda done, total: None):
-        """Many lines in one request: Google keeps line breaks, so the answer splits back line by line."""
+    @staticmethod
+    def _google(backend, texts, target, progress=lambda done, total: None):
+        """Many texts per request, each translated on its own (never two lines run into one)."""
         results = []
         for chunk in _chunks(texts, GOOGLE_CHUNK):
-            results.extend(cls._google_lines(backend, chunk, target))
+            results.extend(backend.translate_many(chunk, "auto", target))
             progress(len(results), len(texts))
         return results
-
-    @classmethod
-    def _google_lines(cls, backend, lines, target):
-        joined = "\n".join(t.replace("\n", " ") for t in lines)
-        answer = backend.translate(joined, "auto", target)
-        parts = [p.strip() for p in (answer or "").split("\n")]
-        if len(parts) == len(lines):
-            return parts
-        if len(lines) == 1:
-            return [" ".join(parts)]
-        # Lines merged or split: ask again in two halves (a few requests, not one per line)
-        half = len(lines) // 2
-        return cls._google_lines(backend, lines[:half], target) + cls._google_lines(backend, lines[half:], target)
 
 
 def _digits(text):

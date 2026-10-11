@@ -57,6 +57,25 @@ def fit_line_px(text, width, height, start_px, family=FONT_FAMILY, minimum=MIN_F
     return px
 
 
+def split_like(text, count):
+    """`text` in `count` lines of about the same length, the way the original was (a subtitle of two lines
+    stays two lines); text that already has its own line breaks, or too few words, is left as it is."""
+    words = text.split()
+    if count < 2 or "\n" in text or len(words) < count:
+        return text
+    target = len(" ".join(words)) / count
+    lines, current = [], []
+    for index, word in enumerate(words):
+        left = len(words) - index  # words still to place, one at least for each line still to come
+        if current and len(lines) < count - 1 and (len(" ".join(current + [word])) > target * 1.1
+                                                   or left <= count - 1 - len(lines)):
+            lines.append(" ".join(current))
+            current = []
+        current.append(word)
+    lines.append(" ".join(current))
+    return "\n".join(lines)
+
+
 def _css(rgb, alpha=255):
     return f"rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {alpha})"
 
@@ -202,6 +221,7 @@ class LensOverlay(QWidget):
         else:
             start_px = max(block.line_height / s * 1.05, READABLE_PX) * scale
         one_line = len(block.lines) == 1  # a label or a button: kept on one line, a little wider if need be
+        text = block.translation if one_line else split_like(block.translation, len(block.lines))
         if one_line:
             natural = QFontMetrics(_font(family, start_px, bold)).horizontalAdvance(block.translation) + 8
             w = max(w, min(natural, w * (3 if fixed else 1.6), self.width() - 2 * self._margin - x))
@@ -210,8 +230,9 @@ class LensOverlay(QWidget):
         elif one_line:
             px = fit_line_px(block.translation, w - 6, h * 1.3 * scale, start_px, family, bold=bold)
         else:
-            px = fit_font_px(block.translation, w - 4, h * scale, start_px, family, bold=bold)
+            px = fit_font_px(text, w - 4, h * scale, start_px, family, bold=bold)
         label = BlockLabel(self, block, rtl, style, self.copy_all)
+        label.setText(text)
         label.setWordWrap(not one_line or fixed)
         label.setFont(_font(family, px, bold))
         needed = label.heightForWidth(int(w)) if label.wordWrap() else label.sizeHint().height()

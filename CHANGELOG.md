@@ -3,6 +3,18 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-10-12
+
+### Added
+- **The EchoSub Lens window.** A click on the Lens icon by the clock no longer turns translation on and off: it opens a window with a big *Start / Stop translating* button that says what Lens is doing, and every option on a page of its own — *Translate* (a whole screen, an area or the lens around the mouse; where the translations show), *Languages*, *Translator*, *Appearance*, *Keyboard shortcuts* — each with a line that says what it does. Closing it keeps Lens running; right-click the icon for the quick menu.
+- **About page**, like EchoSub's: version, author, GitHub / LinkedIn / Discord / email, ♥ support, license, changelog and source code.
+- Screenshots in the README.
+
+### Fixed
+- **Google Translate no longer keeps stopping.** Lens now asks the Google service Chrome's translation extension uses: every text of the screen in one request, each answered on its own. When one Google service says "too many requests", Lens asks another, and if all refuse it pauses 5 seconds (it was 20 seconds, doubling up to 5 minutes). On this PC the old service was refusing every request while the new one answered in 0.1 s.
+- **Dialogue lines are no longer run together.** A subtitle line that starts with a dash (`- Where to?` / `- Home.`) is a text of its own, translated on its own, and keeps its dash (on the right in Arabic). Google's answers are no longer split back from one long text, so two lines can never come back as one.
+- **A sentence over two lines is shown on two lines**, of about the same length, instead of one.
+
 ## [1.1.2] — 2026-10-11
 
 ### Added

@@ -40,6 +40,7 @@ DEFAULTS = {
     "text_window": False,        # the translation window (the translated text in a box, above all windows)
     "text_window_settings": None,  # its place, size, font size and "original text too"
     "overlay_visible": True,     # the translations over the screen (turned off from the translation window)
+    "window_geometry": None,     # [x, y, w, h] of the EchoSub Lens window (a click on the tray icon opens it)
 }
 
 

@@ -9,7 +9,33 @@ page or program underneath. It also translates files: pictures, PDF, Word and su
 EchoSub Lens is the screen-translation tool of [EchoSub](https://github.com/mPhpMaster/echo-sub) (live, translated
 captions for anything your PC plays), released here as a project of its own. It runs on its own, or beside EchoSub.
 
+<p align="center"><img src="docs/images/window-translate.png" alt="The EchoSub Lens window: Start / Stop and what to translate" width="760"></p>
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Languages](docs/images/window-languages.png) | ![Translator](docs/images/window-translator.png) |
+| *Languages: what to translate into, and the language of the text on the screen* | *Translator: Google online, or NLLB offline on your graphics card* |
+| ![Appearance](docs/images/window-appearance.png) | ![Keyboard shortcuts](docs/images/window-shortcuts.png) |
+| *Appearance: font, size and colours, shown at once* | *A keyboard shortcut for every option* |
+| ![Translation window](docs/images/translation-window.png) | ![About](docs/images/window-about.png) |
+| *The translation window: a dialogue keeps a line, and its dash, for each speaker* | *About: version, author, links and ♥ support* |
+
+<p align="center"><img src="docs/images/progress-note.png" alt="A note in the corner of the screen while Lens translates"><br>
+<i>Everything Lens does shows in a small note in the corner of the screen.</i></p>
+
+The pictures are made by `scripts\screenshots.py`.
+
 ## Features
+
+**One window for everything**
+- **Click the Lens icon by the clock** to open the EchoSub Lens window: a big *Start / Stop translating* button
+  that shows what Lens is doing, and every option on a page of its own — *Translate*, *Languages*, *Translator*,
+  *Appearance*, *Keyboard shortcuts* and *About* — each with a line that says what it does. Closing the window keeps
+  Lens running by the clock; right-click the icon for the quick menu.
+- *About*: the version, the author and his links (GitHub, LinkedIn, Discord, email), the license, the changelog
+  and the source code.
 
 **What to translate**
 - **An area** you drag on any screen (`Ctrl+Alt+R`), or **a whole screen** — one of your monitors.
@@ -25,19 +51,22 @@ captions for anything your PC plays), released here as a project of its own. It 
   translations over the screen.
 
 **While it translates**
-- Click the tray icon or press `Ctrl+Alt+T` to start or stop.
+- Press `Ctrl+Alt+T` — or *Start / Stop* in the window, or *Translating* in the right-click menu — to start or stop.
 - Clicks, scrolling and typing go straight through to the page or program underneath.
 - **Hold `Ctrl`** and the translations take the mouse: select a word or a sentence and press `Ctrl+C`, or
   right-click for *Copy this translation*, *Copy the original text* or *Copy all translations*. Hovering with `Ctrl`
   held shows the original. *Select mode* keeps them that way without holding `Ctrl`.
-- While the page scrolls or changes, the translations step aside and come back once it settles. Text already
+- The translations stay on the screen until the new ones are ready — no blinking over a video. Text already
   translated is remembered, so only new text is translated again.
+- **Subtitles:** a dialogue (`- Where to?` / `- Home.`) keeps a line and a dash for each speaker, and a sentence
+  over two lines is shown on two lines.
 
 **Screen sharing**
 - Translations show in screenshots and screen sharing (Discord, Teams, OBS), so the people watching see the
   translated screen — or untick *Show translations in screenshots and screen sharing* to keep them to yourself.
 - Lens never reads its own words back: it leaves them out when it compares the screen, reads text only from a
-  picture without them, and every few seconds looks underneath for text that changed (adjustable, or never).
+  picture without them, and every second looks underneath for text that changed (adjustable, or never) — in a few milliseconds,
+  without anything changing on the screen.
 
 **Your way**
 - *Appearance*: font, size (fitted to the original, larger or smaller, or one fixed size), bold, text and background
@@ -53,7 +82,9 @@ captions for anything your PC plays), released here as a project of its own. It 
 - **Translating:** NLLB-200 (offline, on your graphics card or processor) or Google Translate. *Default* follows
   EchoSub's choice when EchoSub is installed (and shares its downloaded models); otherwise it is your Windows
   language and Google Translate, which needs nothing downloaded. An NLLB model (about 600 MB or 1.3 GB) is
-  downloaded the first time you choose it.
+  downloaded the first time you choose it. Only one translator is loaded at a time: choosing another one frees the
+  memory of the one before. Google gets every text of the screen in one request and answers each on its own; when
+  one of its services says "too many requests", Lens asks another, and only pauses for a few seconds if all refuse.
 
 ## Requirements
 
@@ -108,7 +139,7 @@ Google's privacy policy applies. Lens keeps no history of what it read.
 ## Support the developer
 
 EchoSub Lens is free and always will be. If it helps you, you can support its development with a donation through
-**[PayPal](https://paypal.me/mfsafadi)** — it is also in the app, under *♥ Support the developer* in the tray menu.
+**[PayPal](https://paypal.me/mfsafadi)** — it is also in the app, under *♥ Support the developer* in the tray menu and on the *About* page.
 It is entirely optional: nothing is held back, and Lens never asks.
 
 ## License

@@ -75,28 +75,6 @@ class KeysTest(unittest.TestCase):
         page.load(lens_shortcuts.defaults())
         self.assertTrue(page.valid())
 
-    def test_settings_window_keeps_keys_only_when_windows_gives_them(self):
-        from echosub_lens.lens_settings import LensSettings
-
-        styles, offered = [], []
-        answer = [["F7"]]
-
-        def apply_keys(keys):
-            offered.append(keys)
-            return answer.pop(0) if answer else []
-
-        window = LensSettings(lens_style.DEFAULT_STYLE, lens_shortcuts.defaults(), styles.append, apply_keys)
-        window.shortcuts.editors["copy_all"].setKeySequence(QKeySequence("F7"))
-        window.accept()
-        self.assertTrue(window.isVisible() or window.result() == 0)  # still open: F7 is taken elsewhere
-        self.assertIn("F7", window.shortcuts.status.text())
-        window.accept()
-        self.assertEqual(offered[-1]["copy_all"], "F7")
-        window.appearance.bold.setChecked(True)
-        self.assertTrue(styles[-1]["bold"])
-        window.reject()
-        self.assertEqual(styles[-1], lens_style.DEFAULT_STYLE)  # Cancel puts the old look back
-
 
 class WordTest(unittest.TestCase):
     def setUp(self):

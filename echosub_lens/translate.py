@@ -13,6 +13,9 @@ log = logging.getLogger(__name__)
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?。！？؟])\s+")
 JSON_URL = "https://translate.googleapis.com/translate_a/single"  # Google Translate's own JSON service
+# The service Chrome's translation extension uses: many texts in one request, each answered on its own (no
+# lines to split back), and it keeps answering while the other two say "too many requests"
+MANY_URL = "https://clients5.google.com/translate_a/t"
 
 
 class NoTranslator:
@@ -102,8 +105,8 @@ class RateLimited(Exception):
 class GoogleTranslator:
     streaming = False  # avoid hammering the web API with partial results
     MIN_INTERVAL = 0.35          # s between requests (Google allows about 5 per second)
-    RETRY_DELAYS = (1.0, 3.0)    # s to wait before retrying a request Google refused
-    COOLDOWN = (20.0, 300.0)     # s to pause after the retries fail: first time, maximum (doubles each time)
+    RETRY_DELAYS = (0.5, 1.5)    # s to wait before retrying a request Google refused
+    COOLDOWN = (5.0, 60.0)       # s to pause after the retries fail: first time, maximum (doubles each time)
 
     def __init__(self, fallback=None):
         """`fallback`: (name, factory) of an offline translator used while Google refuses requests."""
@@ -115,6 +118,7 @@ class GoogleTranslator:
         self._cache = {}
         self._session = None
         self._web_only = False
+        self._many_broken = False
         self._lock = threading.Lock()
         self._last_request = 0.0
         self._paused_until = 0.0
@@ -127,8 +131,15 @@ class GoogleTranslator:
     def translate(self, text, src, tgt):
         if not text:
             return text
+        return self.translate_many([text], src, tgt)[0]
+
+    def translate_many(self, texts, src, tgt):
+        """Many texts, each translated on its own, in as few requests as Google allows."""
+        texts = list(texts)
+        if not any(texts):
+            return texts
         try:
-            result = self._google(text, tgt)
+            result = self._google(texts, tgt)
         except RateLimited:
             offline = self._offline_translator()
             if offline is None:
@@ -137,7 +148,7 @@ class GoogleTranslator:
                 self._offline = True
                 self.notify(f"Google Translate is limiting requests — translating offline with "
                             f"{self._fallback_spec[0]} for now")
-            return offline.translate(text, src, tgt)
+            return [offline.translate(t, src, tgt) if t else t for t in texts]
         if self._offline:
             self._offline = False
             self.notify("Google Translate is available again")
@@ -160,6 +171,59 @@ class GoogleTranslator:
                 self._fallback_spec = None
         return self._fallback
 
+    def _ask_many(self, texts, key):
+        """Chrome's service first; when it refuses or fails, the other services, many lines in one text."""
+        refused = False
+        if not self._many_broken:
+            try:
+                return self._ask_chrome(texts, key)
+            except self._too_many:
+                refused = True
+            except Exception as e:
+                log.warning("Google's Chrome translation service failed (%s); using the others", e)
+                self._many_broken = True
+        try:
+            return self._ask_lines(texts, key)
+        except self._too_many:
+            raise
+        except Exception:
+            if refused:
+                raise self._too_many()
+            raise
+
+    def _ask_chrome(self, texts, key):
+        r = self._web_session().post(MANY_URL, params={"client": "dict-chrome-ex", "sl": "auto", "tl": key},
+                                     data=[("q", t) for t in texts], timeout=10)
+        if r.status_code == 429:
+            raise self._too_many()
+        r.raise_for_status()
+        answer = r.json()
+        if len(texts) == 1 and answer and isinstance(answer[0], str):
+            answer = [answer]  # one text, sometimes answered without the list around it
+        if not isinstance(answer, list) or len(answer) != len(texts):
+            raise ValueError("Google answered a different number of texts")
+        return [(a[0] if isinstance(a, list) else a) or t for a, t in zip(answer, texts)]
+
+    def _ask_lines(self, texts, key):
+        """Lines joined in one text: Google keeps line breaks, so the answer splits back line by line. When
+        it merged some, the two halves are asked again (a few requests, not one per line)."""
+        joined = "\n".join(t.replace("\n", " ") for t in texts)
+        parts = [p.strip() for p in (self._ask(joined, key) or "").split("\n")]
+        if len(parts) == len(texts):
+            return parts
+        if len(texts) == 1:
+            return [" ".join(parts)]
+        half = len(texts) // 2
+        return self._ask_lines(texts[:half], key) + self._ask_lines(texts[half:], key)
+
+    def _web_session(self):
+        if self._session is None:
+            import requests
+
+            self._session = requests.Session()
+            self._session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        return self._session
+
     def _ask(self, text, key):
         """One request: Google's JSON service (one kept-open connection, about 0.2 s), or, when that fails
         for another reason than too many requests, the translate.google.com page through deep-translator."""
@@ -176,19 +240,14 @@ class GoogleTranslator:
         return self._cache[key].translate(text)
 
     def _ask_json(self, text, key):
-        if self._session is None:
-            import requests
-
-            self._session = requests.Session()
-            self._session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        r = self._session.post(JSON_URL, params={"client": "gtx", "sl": "auto", "tl": key, "dt": "t"},
-                               data={"q": text}, timeout=10)
+        r = self._web_session().post(JSON_URL, params={"client": "gtx", "sl": "auto", "tl": key, "dt": "t"},
+                                     data={"q": text}, timeout=10)
         if r.status_code == 429:
             raise self._too_many()
         r.raise_for_status()
         return "".join(part[0] for part in r.json()[0] if part and part[0])
 
-    def _google(self, text, tgt):
+    def _google(self, texts, tgt):
         key = languages.google_code(tgt)
         with self._lock:
             now = time.monotonic()
@@ -199,7 +258,7 @@ class GoogleTranslator:
                 time.sleep(max(delay, self._last_request + self.MIN_INTERVAL - time.monotonic(), 0.0))
                 self._last_request = time.monotonic()
                 try:
-                    result = self._ask(text, key) or text
+                    result = self._ask_many(texts, key)
                 except self._too_many:
                     continue
                 self._cooldown = self.COOLDOWN[0]

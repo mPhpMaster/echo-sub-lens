@@ -147,6 +147,32 @@ def image_array(image):
     return data.reshape(image.height(), stride)[:, : image.width() * 3].reshape(image.height(), image.width(), 3)
 
 
+def keep_dash(text, translation):
+    """A dialogue line keeps its dash ("- Where to?" -> "- إلى أين؟"); translators often drop it."""
+    if not translation or not lens_ocr.spoken_line(text):
+        return translation
+    translation = translation.strip().lstrip(RLM)
+    if not lens_ocr.spoken_line(translation):
+        translation = "- " + translation
+    # Right-to-left text: a mark before the dash puts it on the right, where an Arabic line starts
+    return RLM + translation if _right_to_left(translation) else translation
+
+
+RLM = "‏"  # right-to-left mark
+
+
+def _right_to_left(text):
+    import unicodedata
+
+    for ch in text:
+        kind = unicodedata.bidirectional(ch)
+        if kind in ("R", "AL"):
+            return True
+        if kind == "L":
+            return False
+    return False
+
+
 def cut_at_edge(block, width):
     """A short piece of text touching the side of the area: most likely part of a word or line cut off."""
     box = block.box
@@ -380,7 +406,7 @@ class LensScanner(QObject):
         translations = translator.translate_many([b.text for b in blocks], target, progress=translated)
         pixels = image_array(image) if blocks else None
         for block, translation in zip(blocks, translations):
-            block.translation = translation
+            block.translation = keep_dash(block.text, translation)
             block.background, block.foreground = colors_of(pixels, block.box)
         result = [b for b in blocks if b.translation and b.translation.strip() != b.text.strip()]
         report(f"Done: {len(result)} translated on the screen" if result else "Done: no text to translate here",

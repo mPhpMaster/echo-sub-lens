@@ -41,6 +41,9 @@ class LensMenuMixin:
 
     def _build_menu(self):
         m = QMenu()
+        opener = m.addAction("Open EchoSub Lens…", lambda: self.open_window())
+        m.setDefaultAction(opener)  # shown in bold: what a click on the icon does
+        m.addSeparator()
         self.act_running = self._item(m, "Translating", "toggle", self.toggle, checkable=True,
                                       checked=self.scanner.running)
         self._item(m, "Choose an area of the screen…", "area")
@@ -67,7 +70,7 @@ class LensMenuMixin:
         m.addSeparator()
         self.act_select = self._item(m, "Select mode: translations take the mouse", "select_mode", lambda: None,
                                      checkable=True, checked=self.cfg["select_mode"])
-        self.act_select.toggled.connect(lambda on: self._set(select_mode=on))
+        self.act_select.toggled.connect(self.set_select_mode)
         tip = m.addAction("Tip: hold Ctrl to select and copy a translation")
         tip.setEnabled(False)
         self._item(m, "Copy all translations", "copy_all")
@@ -76,7 +79,8 @@ class LensMenuMixin:
                                           checked=self.text_window is not None)
         self.act_text_window.toggled.connect(self.show_text_window)
         m.addSeparator()
-        self._item(m, "Settings (look, keyboard shortcuts)…", "settings")
+        self._item(m, "Settings (every option, look, keyboard shortcuts)…", "settings")
+        m.addAction("About EchoSub Lens…", lambda: self.open_window("about"))
         donate = m.addAction("♥ Support the developer (donate)…", self.donate)
         donate.setToolTip(DONATE_URL)
         self._item(m, "Exit", "quit")
@@ -123,7 +127,7 @@ class LensMenuMixin:
         choices = [(lens_ocr.AUTO, "Automatic (Windows display languages)")]
         choices += [(tag, tag) for tag in installed]
         menu = self._choice_menu(m, "Text on the screen is in", choices, lambda: self.cfg["ocr_language"],
-                                 lambda tag: self._set_and_restart(ocr_language=tag))
+                                 self.set_ocr_language)
         menu.addSeparator()
         menu.addAction("Add a language to read…", lambda: QDesktopServices.openUrl(QUrl(LANGUAGE_SETTINGS)))
 
