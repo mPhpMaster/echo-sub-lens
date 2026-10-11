@@ -3,6 +3,15 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] — 2026-10-11
+
+### Added
+- **♥ Support the developer**: an item in the tray menu opens the developer's PayPal page, for anyone who wants to give something back. Optional and quiet: no pop-ups, no reminders, nothing held back. The repository page gets a *Sponsor* button too.
+
+### Changed
+- **One translator at a time.** Choosing another translator switches the one before off at once, and its model leaves the graphics card and the memory (about 700 MB for NLLB-600M). Google Translate no longer keeps an offline model waiting in the memory, so with Google nothing heavy runs on the PC.
+- **Everything Lens does shows on the screen**, in the corner: reading and translating (now at once, not only when it takes long, ending with how many texts were translated), loading, switching off or changing the translator, starting and stopping, the language, the translation window, screenshots, and every problem (Google limiting requests, a translator that could not load). These notes used to be balloons by the clock, or nothing.
+
 ## [1.1.1] — 2026-10-11
 
 ### Fixed

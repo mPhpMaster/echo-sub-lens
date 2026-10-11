@@ -4,9 +4,10 @@
 
 APP_NAME = "EchoSub Lens"
 APP_ID = "EchoSubLens"
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 AUTHOR = "Mohammad Al-Safadi"
 COPYRIGHT = f"Copyright © 2026 {AUTHOR}"
 LICENSE = "GPL-3.0-only"
 REPO_URL = "https://github.com/mPhpMaster/echo-sub-lens"
+DONATE_URL = "https://paypal.me/mfsafadi"  # the developer's PayPal, the same as EchoSub's

@@ -3,6 +3,7 @@
 """EchoSub Lens: its icon by the clock, its keys, and what ties the scanner to the overlay."""
 import logging
 import os
+import threading
 
 from PySide6.QtCore import QRect, QTimer
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen
@@ -72,6 +73,7 @@ class LensApp(LensMenuMixin):
         self.busy.screen_of = lambda: self.area()[0]
         self.activity = Activity()
         self.activity.changed.connect(self.busy.set)
+        self.activity.told.connect(self.busy.notice)
         self.scanner.working.connect(
             lambda on: self.activity.say("screen", "Reading and translating the screen…" if on else "", 0))
         self.scanner.progress.connect(
@@ -152,6 +154,8 @@ class LensApp(LensMenuMixin):
 
     def translator(self):
         key = lens_translate.resolve(self.cfg["translator"], self.base_cfg)
+        for other in [k for k in self._translators if k != key]:
+            self._switch_off(other, self._translators.pop(other))  # one translator at a time: a faster PC
         if key not in self._translators:
             from . import cuda_libs
 
@@ -165,13 +169,41 @@ class LensApp(LensMenuMixin):
 
     def _load_translator(self, key, device, fast_cpu):
         """Runs in a worker thread the first time a translator is needed; says so on the screen."""
-        name = config.TRANSLATORS.get(key, key).split(" — ")[0]
+        name = self._translator_name(key)
         self.activity.say("translator", f"Loading the translator ({name})…")
         downloader = downloads.ModelDownloader(on_event=self._download_event)
         try:
-            return translate.create(key, device, downloader=downloader, fast_cpu=fast_cpu)
+            if key == "google":  # no offline model waiting in the memory: Google alone
+                backend = translate.GoogleTranslator()
+                backend.notify = self.activity.tell
+            else:
+                backend = translate.create(key, device, downloader=downloader, fast_cpu=fast_cpu)
+            where = {"cuda": " on the graphics card", "cpu": " on the processor"}.get(
+                getattr(backend, "device", ""), "")
+            self.activity.tell(f"Translator ready: {name}{where}")
+            return backend
+        except Exception as e:
+            self.activity.tell(f"Could not load the translator ({name}): {e}")
+            raise
         finally:
             self.activity.say("translator")
+
+    @staticmethod
+    def _translator_name(key):
+        return config.TRANSLATORS.get(key, key).split(" — ")[0]
+
+    def _switch_off(self, key, translator):
+        """A translator no longer used lets go of its model, in the background (it may be translating)."""
+        name = self._translator_name(key)
+
+        def run():
+            self.activity.say("switch_off", f"Switching off the translator ({name})…")
+            try:
+                if translator.release():
+                    self.activity.tell(f"Translator switched off ({name}): its memory is free")
+            finally:
+                self.activity.say("switch_off")
+        threading.Thread(target=run, name="lens-switch-off", daemon=True).start()
 
     def _download_event(self, event):
         if event["state"] in ("start", "progress"):
@@ -186,9 +218,12 @@ class LensApp(LensMenuMixin):
 
     def set_target(self, code):
         self._set_and_restart(target_lang=code)
+        self._notify(f"Translating into {languages.name(self.target)}")
 
     def set_translator(self, key):
         self._set_and_restart(translator=key)
+        self.translator()  # switches the one used before off now, not when Lens starts again
+        self._notify(f"Translator: {lens_translate.CHOICES[key]}")
 
     def next_language(self):
         order = [""] + QUICK_TARGETS
@@ -196,7 +231,6 @@ class LensApp(LensMenuMixin):
         code = order[(order.index(current) + 1) % len(order)] if current in order else order[0]
         self.set_target(code or None)
         self.refresh_menu()
-        self._notify(f"Translating into {languages.name(self.target)}")
 
     def next_translator(self):
         order = list(lens_translate.CHOICES)
@@ -204,10 +238,19 @@ class LensApp(LensMenuMixin):
         key = order[(order.index(current) + 1) % len(order)] if current in order else order[0]
         self.set_translator(key)
         self.refresh_menu()
-        self._notify(f"Translator: {lens_translate.CHOICES[key]}")
+
+    def donate(self):
+        """The developer's PayPal page, in the browser: optional, Lens never asks."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from . import DONATE_URL
+
+        QDesktopServices.openUrl(QUrl(DONATE_URL))
+        self._notify("Thank you! The donation page opens in your browser")
 
     def _notify(self, text):
-        self.tray.showMessage(LENS_NAME, text, QSystemTrayIcon.Information, 2500)
+        self.activity.tell(text)  # on the screen, in the corner
 
     # ---- the area ------------------------------------------------------------
     def area(self):
@@ -242,12 +285,14 @@ class LensApp(LensMenuMixin):
         self._fill_screens()
         self._sync_mouse_item()
         self.start()
+        self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
 
     def use_screen(self, name):
         self._set(mode="screen", screen=name)
         self._fill_screens()
         self._sync_mouse_item()
         self.start()
+        self._notify(f"Translating {self._where()} ({name})")
 
     # ---- the lens around the mouse -------------------------------------------
     def use_mouse_mode(self, on):
@@ -261,6 +306,7 @@ class LensApp(LensMenuMixin):
         self._fill_screens()
         self._sync_mouse_item()
         self.start()
+        self._notify(f"Translating {self._where()}")
 
     def _sync_mouse_item(self):
         self.act_mouse.blockSignals(True)
@@ -343,7 +389,17 @@ class LensApp(LensMenuMixin):
         self._update_state()
 
     def toggle(self):
-        self.stop() if self.scanner.running else self.start()
+        if self.scanner.running:
+            self.stop()
+            self._notify("Translation stopped")
+        else:
+            self.start()
+            self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
+
+    def _where(self):
+        _, rect = self.area()
+        return {"screen": "the whole screen", "mouse": "the lens around the mouse"}.get(
+            self.cfg["mode"], f"an area of {rect.width()} × {rect.height()}")
 
     def _set_and_restart(self, **values):
         self._set(**values)
@@ -392,6 +448,8 @@ class LensApp(LensMenuMixin):
         else:
             return
         self._set(text_window=on)
+        self._notify("Translation window open" if on
+                     else "Translation window closed: translations show on the screen")
         self.act_text_window.blockSignals(True)
         self.act_text_window.setChecked(on)
         self.act_text_window.blockSignals(False)
@@ -411,13 +469,16 @@ class LensApp(LensMenuMixin):
             self._set(overlay_visible=settings["overlay"])
             if settings["overlay"]:
                 self.scanner.restart()
+                self._notify("Translations show on the screen too")
             else:
                 self.overlay.clear()
+                self._notify("Translations show only in the translation window")
         self._save_text_window.start()
 
     def _on_status(self, text):
         log.warning("Lens: %s", text)
         self.tray.setToolTip(f"{LENS_NAME} — {text}"[:120])
+        self.activity.tell(text)
 
     def _follow_ctrl(self):
         self.overlay.set_interactive(self.cfg["select_mode"] or ctrl_held())
@@ -483,10 +544,14 @@ class LensApp(LensMenuMixin):
     def _set_capture_visible(self, visible):
         self._set(capture_visible=visible)
         self.overlay.set_capture_hidden(not visible)
+        self._notify("Translations show in screenshots and screen sharing" if visible
+                     else "Translations are left out of screenshots and screen sharing")
 
     def _set_peek(self, seconds):
         self._set(peek_seconds=seconds)
         self.scanner.peek_every = seconds
+        self._notify(f"Looking under the translations every {seconds} s" if seconds
+                     else "Not looking under the translations")
 
     def quit(self):
         self.scanner.stop()

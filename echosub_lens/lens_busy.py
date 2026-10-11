@@ -24,7 +24,8 @@ CARD = QColor(15, 23, 42, 235)
 ACCENT = QColor(79, 195, 247)
 TEXT = QColor(241, 245, 249)
 MUTED = QColor(148, 163, 184)
-SHOW_AFTER_MS = 300      # quick work is not announced: the note would only flicker
+LINGER_MS = 900          # the note stays this long after the work is done: quick work is seen, not a flicker
+NOTICE_MS = 2500         # how long a note about something done (a translator switched off) stays
 SPLASH_MIN_MS = 1200     # long enough to be read
 
 
@@ -141,9 +142,14 @@ class Activity(QObject):
     `percent` is how far it got (0-100), or -1 when that is not known.
     """
     changed = Signal(str, str, int)
+    told = Signal(str)
 
     def say(self, source, text="", percent=-1):
         self.changed.emit(source, text, percent)
+
+    def tell(self, text):
+        """Something was done (a translator switched off, translation stopped): a note for a moment."""
+        self.told.emit(text)
 
 
 class BusyIndicator(_Spinning):
@@ -154,42 +160,57 @@ class BusyIndicator(_Spinning):
         super().__init__(click_through=True)
         self.texts = {}          # source -> (text, percent); the newest one is shown
         self.screen_of = QGuiApplication.primaryScreen
-        self._due = QTimer(self)
-        self._due.setSingleShot(True)
-        self._due.setInterval(SHOW_AFTER_MS)
-        self._due.timeout.connect(self._appear)
+        self._shown = ("", -1)
+        self._hide = QTimer(self)
+        self._hide.setSingleShot(True)
+        self._hide.setInterval(LINGER_MS)
+        self._hide.timeout.connect(self._disappear)
+        self._notice_end = QTimer(self)
+        self._notice_end.setSingleShot(True)
+        self._notice_end.timeout.connect(lambda: self.set("notice", ""))
         self.setFont(QFont("Segoe UI", 10))
 
     @property
     def text(self):
-        return next(reversed(self.texts.values()), ("", -1))[0]
+        return self._shown[0]
 
     @property
     def percent(self):
-        return next(reversed(self.texts.values()), ("", -1))[1]
+        return self._shown[1]
 
     def set(self, source, text, percent=-1):
         """Show `text` for `source` (or stop showing it, when empty), with how far it got (-1: not known)."""
         self.texts.pop(source, None)
         if text:
             self.texts[source] = (text, max(-1, min(100, percent)))
-        if not self.texts:
-            self._due.stop()
-            self.hide()
-        elif self.isVisible():
+        if self.texts:
+            self._hide.stop()
+            self._shown = next(reversed(self.texts.values()))
             self._place()
+            self.show()
             self.update()
-        elif not self._due.isActive():
-            self._due.start()
+        elif self.isVisible():
+            self._shown = (self._shown[0], 100)  # done: the last words stay a moment, the bar full
+            self.update()
+            self._hide.start()
+        else:
+            self._shown = ("", -1)
+
+    def notice(self, text, ms=NOTICE_MS):
+        """Say that something was done; it goes away by itself."""
+        self.set("notice", text, 100)
+        self._notice_end.start(ms)
 
     def clear(self):
         self.texts.clear()
-        self.set("", "")
+        self._notice_end.stop()
+        self._hide.stop()
+        self._disappear()
 
-    def _appear(self):
-        if self.texts:
-            self._place()
-            self.show()
+    def _disappear(self):
+        if not self.texts:
+            self._shown = ("", -1)
+            self.hide()
 
     def _place(self):
         width = min(520, self.fontMetrics().horizontalAdvance(self.text) + 64)

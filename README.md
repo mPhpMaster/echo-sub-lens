@@ -1,5 +1,7 @@
 # EchoSub Lens
 
+<a href="https://paypal.me/mfsafadi"><img alt="Support the developer on PayPal" src="https://img.shields.io/badge/support-PayPal-E11D48.svg"></a>
+
 **Translate the text on your screen, in place.** Pick an area, a whole screen, or let a small lens follow your
 mouse — every piece of text in it is shown translated, right on top of the original, while you keep using the
 page or program underneath. It also translates files: pictures, PDF, Word and subtitles.
@@ -102,6 +104,12 @@ The tests need no OCR language, model or network.
 The picture of your screen never leaves your PC: it is read by Windows on your computer. With an NLLB translator
 nothing is sent anywhere. With Google Translate, the text Lens read is sent to Google to be translated, and
 Google's privacy policy applies. Lens keeps no history of what it read.
+
+## Support the developer
+
+EchoSub Lens is free and always will be. If it helps you, you can support its development with a donation through
+**[PayPal](https://paypal.me/mfsafadi)** — it is also in the app, under *♥ Support the developer* in the tray menu.
+It is entirely optional: nothing is held back, and Lens never asks.
 
 ## License
 

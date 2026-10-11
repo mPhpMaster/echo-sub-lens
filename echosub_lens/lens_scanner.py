@@ -383,4 +383,6 @@ class LensScanner(QObject):
             block.translation = translation
             block.background, block.foreground = colors_of(pixels, block.box)
         result = [b for b in blocks if b.translation and b.translation.strip() != b.text.strip()]
+        report(f"Done: {len(result)} translated on the screen" if result else "Done: no text to translate here",
+               100)
         return Unsettled(result) if growing else result

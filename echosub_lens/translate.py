@@ -55,6 +55,10 @@ class NLLBTranslator:
     def translate(self, text, src, tgt):
         return self.translate_many([text], src, tgt)[0]
 
+    def close(self):
+        """Free the model's memory (on the graphics card or in RAM) right away."""
+        self.translator.unload_model()
+
     def translate_many(self, texts, src, tgt):
         """Several texts in one pass over the model (much faster on a graphics card than one by one)."""
         src_code, tgt_code = languages.nllb_code(src), languages.nllb_code(tgt)
@@ -138,6 +142,14 @@ class GoogleTranslator:
             self._offline = False
             self.notify("Google Translate is available again")
         return result
+
+    def close(self):
+        if self._session is not None:
+            self._session.close()
+        close = getattr(self._fallback, "close", None)
+        if close is not None:
+            close()
+        self._fallback = None
 
     def _offline_translator(self):
         if self._fallback is None and self._fallback_spec is not None:

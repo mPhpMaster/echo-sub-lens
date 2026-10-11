@@ -62,6 +62,25 @@ class LensTranslator:
             self._backend = self._factory(self.key, device)
         return self._backend
 
+    def release(self):
+        """Let go of the translator's model (memory on the graphics card and in RAM); it loads again if it
+        is needed. True when one was loaded."""
+        with self._lock:  # never in the middle of a translation
+            backend, self._backend = self._backend, None
+        if backend is None:
+            return False
+        close = getattr(backend, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                log.exception("Could not close the translator")
+        del backend
+        import gc
+
+        gc.collect()
+        return True
+
     def cached(self, text, target):
         return self._cache.get((target, text))
 

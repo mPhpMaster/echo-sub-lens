@@ -491,14 +491,20 @@ class AppTest(unittest.TestCase):
                                   "done": 300 * 1024 * 1024, "total": 600 * 1024 * 1024})
             self.assertEqual(said[-1], ("translator", "Downloading the translation model (NLLB-600M)… 50% "
                                                       "(300.0 MB of 600.0 MB)", 50))
+            told = []
+            lens.activity.told.connect(told.append)
             with mock.patch.object(lens_ui.translate, "create", return_value="backend"):
-                self.assertEqual(lens._load_translator("google", "cpu", True), "backend")
-            self.assertEqual(said[-2], ("translator", "Loading the translator (Google Translate)…", -1))
+                self.assertEqual(lens._load_translator("nllb-600m", "cpu", True), "backend")
+            self.assertEqual(said[-2][0], "translator")
+            self.assertTrue(said[-2][1].startswith("Loading the translator ("))
             self.assertEqual(said[-1], ("translator", "", -1))
+            self.assertTrue(told[-1].startswith("Translator ready"))
+            google = lens._load_translator("google", "cpu", True)
+            self.assertIsNone(google._fallback_spec)  # Google alone: no offline model kept in the memory
             lens.scanner.working.emit(True)
             self.assertEqual(lens.busy.text, "Reading and translating the screen…")
             lens.stop()
-            self.assertEqual(lens.busy.text, "")
+            self.assertNotIn("screen", lens.busy.texts)
             lens.tray.hide()
             lens.overlay.close()
 
@@ -546,23 +552,43 @@ class TextWindowTest(unittest.TestCase):
 
 
 class BusyTest(unittest.TestCase):
-    def test_the_newest_work_is_shown_and_quick_work_never_appears(self):
+    def test_the_newest_work_is_shown_at_once_and_stays_a_moment(self):
         from echosub_lens.lens_busy import BusyIndicator
 
         busy = BusyIndicator()
         busy.set("screen", "Reading…")
-        self.assertFalse(busy.isVisible())  # only after a moment
+        self.assertTrue(busy.isVisible())  # at once: everything Lens does shows
         busy.set("translator", "Downloading…", 40)
         self.assertEqual((busy.text, busy.percent), ("Downloading…", 40))
-        busy._appear()
-        self.assertTrue(busy.isVisible())
         busy.set("translator", "")
         self.assertEqual(busy.text, "Reading…")
         busy.set("screen", "")
+        self.assertTrue(busy.isVisible())  # the last words stay a moment...
+        self.assertEqual((busy.text, busy.percent), ("Reading…", 100))
+        busy._hide.timeout.emit()
+        self.assertFalse(busy.isVisible())  # ... then it goes
+        busy.notice("Translator switched off")
+        self.assertEqual(busy.text, "Translator switched off")
+        busy._notice_end.timeout.emit()
+        busy._hide.timeout.emit()
         self.assertFalse(busy.isVisible())
-        busy.set("screen", "Reading…")
-        busy.set("screen", "")
-        self.assertFalse(busy._due.isActive())
+        busy.clear()
+
+    def test_switching_translators_lets_go_of_the_one_before(self):
+        from echosub_lens import lens_translate
+
+        class Model:
+            closed = False
+
+            def close(self):
+                Model.closed = True
+
+        t = lens_translate.LensTranslator("nllb-600m", factory=lambda k, d: Model())
+        self.assertFalse(t.release())  # nothing loaded yet
+        t._get_backend()
+        self.assertTrue(t.release())
+        self.assertTrue(Model.closed)
+        self.assertIsNone(t._backend)
 
     def test_the_splash_shows_its_message_and_closes(self):
         from echosub_lens.lens_busy import SplashScreen

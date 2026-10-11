@@ -5,7 +5,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import QMenu
 
-from . import languages, lens_follow, lens_ocr, lens_shortcuts, lens_translate
+from . import DONATE_URL, languages, lens_follow, lens_ocr, lens_shortcuts, lens_translate
 from .languages import QUICK_TARGETS
 
 PEEK_CHOICES = ((0, "Never"), (1, "Every second"), (2, "Every 2 seconds"), (5, "Every 5 seconds"),
@@ -77,6 +77,8 @@ class LensMenuMixin:
         self.act_text_window.toggled.connect(self.show_text_window)
         m.addSeparator()
         self._item(m, "Settings (look, keyboard shortcuts)…", "settings")
+        donate = m.addAction("♥ Support the developer (donate)…", self.donate)
+        donate.setToolTip(DONATE_URL)
         self._item(m, "Exit", "quit")
         return m
 
