@@ -3,6 +3,12 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] — 2026-10-12
+
+### Added
+- **Yandex Translate** and **Papago** (Naver) too, both without an account: Yandex for many languages (strong for Russian), Papago for 16 (strong for Korean, Japanese and Chinese; Arabic included). A language a translator cannot write is said clearly, with a suggestion to choose another one.
+- The *Translator* page asks for the keys of any translator that needs some, the same way it asks for DeepL's.
+
 ## [1.6.0] — 2026-10-12
 
 ### Added

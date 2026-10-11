@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeySequence  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLineEdit, QSystemTrayIcon  # noqa: E402
 
 import echosub_lens  # noqa: E402
-from echosub_lens import lens_app, lens_menu, lens_ui  # noqa: E402
+from echosub_lens import lens_app, lens_menu, lens_translate, lens_ui  # noqa: E402
 from echosub_lens.lens_about import AboutPage  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
@@ -169,7 +169,8 @@ class TranslatorChoicesTest(unittest.TestCase):
         self.assertEqual(window.translator_sections, ["Online", "Offline, on this PC"])
         groups = dict(lens_menu.translator_groups())
         self.assertEqual(groups[""], ["same"])
-        self.assertEqual(groups["Online"], ["google", "bing", "mymemory", "deepl"])
+        self.assertEqual(groups["Online"][:4], ["google", "bing", "mymemory", "deepl"])
+        self.assertEqual(groups["Online"], [k for k in lens_translate.CHOICES if k in lens_translate.ONLINE])
         self.assertEqual(groups["Offline, on this PC"], ["nllb-600m", "nllb-1.3b"])
         self.assertIn("offline ones keep everything on this PC", window.privacy_note.text())
         self.assertEqual(window.deepl_key.text(), "")

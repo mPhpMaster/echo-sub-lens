@@ -26,11 +26,16 @@ CHOICES = {
     "bing": "Microsoft Bing Translator — online",
     "mymemory": "MyMemory — online, limited per day",
     "deepl": "DeepL — online, needs your free key",
+    "yandex": "Yandex Translate — online",
+    "papago": "Papago — online (16 languages)",
     "nllb-600m": config.TRANSLATORS["nllb-600m"],
     "nllb-1.3b": config.TRANSLATORS["nllb-1.3b"],
 }
-ONLINE = {"google", "bing", "mymemory", "deepl"}  # the text read is sent to the service
+ONLINE = {"google", "bing", "mymemory", "deepl", "yandex", "papago"}  # the text read is sent to the service
 NEEDS_KEY = {"deepl"}    # translators that work only with the user's own key (saved in api_keys)
+# What the Translator page asks for each of them: (name in api_keys, label, placeholder), and where to get one
+KEY_FIELDS = {"deepl": [("deepl", "DeepL key", "Paste your DeepL key here")]}
+KEY_URLS = {"deepl": "https://www.deepl.com/pro-api"}
 HELP = {
     SAME: "The translator EchoSub uses when EchoSub is on this PC, else Google Translate.",
     "google": "Google Translate: free, no key, many languages; the text is sent to Google.",
@@ -38,6 +43,10 @@ HELP = {
     "mymemory": "MyMemory: free, no key, about 5000 characters a day; the text is sent to MyMemory (Translated).",
     "deepl": "DeepL: very natural translations; needs your own key (free at deepl.com, 500,000 characters "
              "a month); the text is sent to DeepL.",
+    "yandex": "Yandex Translate: free, no key, many languages (strong for Russian and its neighbours); the text "
+              "is sent to Yandex.",
+    "papago": "Papago (Naver): free, no key; strong for Korean, Japanese and Chinese; 16 languages, Arabic "
+              "included; the text is sent to Naver.",
     "nllb-600m": "NLLB 600M: offline on this PC, nothing is sent anywhere; a one-time download, fast.",
     "nllb-1.3b": "NLLB 1.3B: offline on this PC, nothing is sent anywhere; a bigger download, more accurate.",
 }

@@ -689,6 +689,14 @@ def create(key, device, downloader=None, fast_cpu=True, api_keys=None):
         if not api_key:
             raise TranslatorError("Add your DeepL key in Translator settings (a free key from deepl.com/pro-api)")
         return DeepLTranslator(api_key)
+    if key == "yandex":
+        from .translate_yandex import YandexTranslator
+
+        return YandexTranslator(api_keys)
+    if key == "papago":
+        from .translate_papago import PapagoTranslator
+
+        return PapagoTranslator(api_keys)
     if key in config.NLLB_REPOS:
         from .downloads import ModelDownloader
 

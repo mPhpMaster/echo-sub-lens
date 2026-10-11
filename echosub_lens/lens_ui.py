@@ -242,9 +242,12 @@ class LensApp(LensMenuMixin):
 
     # ---- translators that need the user's own key (DeepL) ------------------------
     def missing_key(self, key):
-        """True when the translator `key` needs the user's key and none was saved."""
-        needs = getattr(lens_translate, "NEEDS_KEY", ())
-        return key in needs and not str((self.cfg.get("api_keys") or {}).get(key) or "").strip()
+        """True when the translator `key` needs the user's key (or keys) and one was not saved."""
+        if key not in getattr(lens_translate, "NEEDS_KEY", ()):
+            return False
+        saved = self.cfg.get("api_keys") or {}
+        fields = getattr(lens_translate, "KEY_FIELDS", {}).get(key) or [(key, "", "")]
+        return any(not str(saved.get(name) or "").strip() for name, _, _ in fields)
 
     def _key_note(self, key):
         return f"{self._translator_name(key)} needs your key: open Translator settings"
@@ -259,15 +262,20 @@ class LensApp(LensMenuMixin):
         self.open_window("translator")
 
     def set_api_key(self, service, key):
-        """Save the user's key for `service` (e.g. "deepl"); a translator of that service already loaded is
-        switched off, so the next text is translated with the new key."""
-        key = (key or "").strip()
+        """Save the user's key for `service` (e.g. "deepl")."""
+        self.set_api_keys(service, {service: key})
+
+    def set_api_keys(self, service, values):
+        """Save the user's keys for the translator `service` ({name in api_keys: value}); a translator of that
+        service already loaded is switched off, so the next text is translated with the new keys."""
+        values = {name: (value or "").strip() for name, value in values.items()}
+        key = all(values.values())
         keys = dict(self.cfg.get("api_keys") or {})
-        if keys.get(service, "") == key:
+        if all(keys.get(name, "") == value for name, value in values.items()):
             self._notify(f"{self._translator_name(service)} key saved" if key else
                          f"No {self._translator_name(service)} key")
             return
-        keys[service] = key
+        keys.update(values)
         self._set(api_keys=keys)
         self._asked_for_key.discard(service)
         if service in self._translators:  # a new one, with the new key (and no translations kept from before)

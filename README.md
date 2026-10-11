@@ -111,6 +111,11 @@ The pictures are made by `scripts\screenshots.py`.
   - **DeepL** — needs your own key (free at [deepl.com/pro-api](https://www.deepl.com/pro-api), 500,000 characters a
     month), added on the *Translator* page. Up to 50 texts in one request; a key that is not valid or a month's
     quota used up is said in words.
+  - **Yandex Translate** — free, no key; many languages, strong for Russian and its neighbours. Many texts in one
+    request; texts in several languages at once are asked again so each is translated.
+  - **Papago** (Naver) — free, no key; 16 languages (Korean, Japanese, Chinese, English, Arabic, French, German,
+    Spanish, Russian, Portuguese, Italian, Vietnamese, Thai, Indonesian, Hindi), strong for Korean, Japanese and
+    Chinese. Another language is said in words: choose another translator for it.
 
   *Default* follows EchoSub's choice when EchoSub is installed (and shares its downloaded models); otherwise it is
   your Windows language and Google Translate, which needs nothing downloaded. An NLLB model (about 600 MB or 1.3 GB)
@@ -158,7 +163,7 @@ The subtitles of a movie without opening a window — for a batch of movies, or 
 `burned` (text in the picture); without it Lens uses the subtitles inside the movie when there are some, else the
 speech. `--out` names the .srt file (default: next to the movie); a `.log` next to it says how it went.
 `--to LANG` translates the subtitles too, into `Movie.LANG.srt` next to them (subtitles already in that language
-are left as they are); `--translator` is `google`, `bing`, `mymemory`, `deepl` (online; DeepL uses the key saved
+are left as they are); `--translator` is `google`, `bing`, `mymemory`, `deepl`, `yandex`, `papago` (online; DeepL uses the key saved
 in Lens), `nllb-600m` or `nllb-1.3b` (offline, on the graphics card when there is one), or `same` — the default: the
 translator Lens uses.
 
@@ -186,7 +191,8 @@ The tests need no OCR language, model or network.
 
 The picture of your screen never leaves your PC: it is read by Windows on your computer. With an NLLB translator
 nothing is sent anywhere. With an online translator, the text Lens read is sent to the service you chose to be
-translated — Google (Google Translate), Microsoft (Bing Translator), MyMemory (Translated srl) or DeepL — and that
+translated — Google (Google Translate), Microsoft (Bing Translator), MyMemory (Translated srl), DeepL, Yandex
+or Naver (Papago) — and that
 service's privacy policy applies. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
 settings file on your PC and sent only to DeepL. Lens keeps no history of what it read.
 

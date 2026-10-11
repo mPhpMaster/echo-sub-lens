@@ -385,6 +385,7 @@ class LensWindow(QWidget):
         layout.addSpacing(8)
         self.translators = QButtonGroup(self)
         self.translator_buttons = {}
+        self.key_edits = {}          # translator -> {name in api_keys: QLineEdit}
         self.translator_sections = []
         for title, keys in translator_groups():
             if title:
@@ -401,8 +402,8 @@ class LensWindow(QWidget):
                     now = lens_translate.resolve(key, self.lens.base_cfg)
                     help_text += f" Here: {lens_translate.CHOICES[now]}."
                 self._help(layout, help_text)
-                if key == "deepl":
-                    self._deepl_key(layout)
+                if getattr(lens_translate, "KEY_FIELDS", {}).get(key):
+                    self._key_rows(layout, key)
                 layout.addSpacing(4)
         self._section(layout, "This PC")
         self.device_label = QLabel(device_text(self.lens.base_cfg))
@@ -410,41 +411,67 @@ class LensWindow(QWidget):
         self.device_label.setWordWrap(True)
         layout.addWidget(self.device_label)
         reset = self._reset_button(layout, "translator")
-        reset.setToolTip("Back to the Default translator. Your DeepL key is kept.")
+        reset.setToolTip("Back to the Default translator. Your keys are kept.")
         layout.addStretch(1)
 
-    def _deepl_key(self, layout):
-        """Under DeepL: the user's own key (hidden as it is typed), a link to get one free, and Save."""
-        self.deepl_key = QLineEdit()
-        self.deepl_key.setEchoMode(QLineEdit.Password)
-        self.deepl_key.setPlaceholderText("Paste your DeepL key here")
-        self.deepl_key.setMinimumWidth(320)
-        self.deepl_key.setText(self.lens.cfg.get("api_keys", {}).get("deepl", ""))
-        self.show_key = QPushButton("Show")
-        self.show_key.setCheckable(True)
-        self.show_key.setToolTip("Show or hide the key")
-        self.show_key.toggled.connect(self._show_key)
-        self.save_key = QPushButton("Save the key")
-        self.save_key.setToolTip("Keep the key in Lens's settings on this PC; DeepL uses it from now on")
-        self.save_key.clicked.connect(self.save_deepl_key)
-        self.deepl_key.returnPressed.connect(self.save_deepl_key)
-        get_key = QPushButton("Get a free key…")
-        get_key.setObjectName("flat")
-        get_key.setCursor(Qt.PointingHandCursor)
-        get_key.setToolTip(DEEPL_KEY_URL)
-        get_key.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DEEPL_KEY_URL)))
-        line = self._row(QLabel("DeepL key"), self.deepl_key, self.show_key, self.save_key)
-        line.setContentsMargins(28, 0, 0, 0)
-        layout.addWidget(line)
-        layout.addWidget(self._row(get_key))
+    def _key_rows(self, layout, translator):
+        """Under a translator that needs the user's own key (or keys): each one hidden as it is typed, Show,
+        Save, and a link to get one."""
+        name_of = self._translator_label(translator)
+        edits = {}
+        fields = lens_translate.KEY_FIELDS[translator]
+        for index, (name, label, placeholder) in enumerate(fields):
+            edit = QLineEdit()
+            edit.setEchoMode(QLineEdit.Password)
+            edit.setPlaceholderText(placeholder)
+            edit.setMinimumWidth(320)
+            edit.setText(self.lens.cfg.get("api_keys", {}).get(name, ""))
+            edit.returnPressed.connect(lambda t=translator: self.save_keys_of(t))
+            edits[name] = edit
+            caption = QLabel(label)
+            caption.setMinimumWidth(110)
+            widgets = [caption, edit]
+            if index == len(fields) - 1:
+                show = QPushButton("Show")
+                show.setCheckable(True)
+                show.setToolTip("Show or hide the key")
+                show.toggled.connect(lambda shown, t=translator, b=show: self._show_keys(t, shown, b))
+                save = QPushButton("Save the key" if len(fields) == 1 else "Save the keys")
+                save.setToolTip(f"Keep it in Lens's settings on this PC; {name_of} uses it from now on")
+                save.clicked.connect(lambda _=False, t=translator: self.save_keys_of(t))
+                widgets += [show, save]
+            line = self._row(*widgets)
+            line.setContentsMargins(28, 0, 0, 0)
+            layout.addWidget(line)
+        self.key_edits[translator] = edits
+        url = getattr(lens_translate, "KEY_URLS", {}).get(translator)
+        if url:
+            get_key = QPushButton("Get a free key…")
+            get_key.setObjectName("flat")
+            get_key.setCursor(Qt.PointingHandCursor)
+            get_key.setToolTip(url)
+            get_key.clicked.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+            layout.addWidget(self._row(get_key))
+        if translator == "deepl":  # the names the DeepL key had first
+            self.deepl_key, self.show_key, self.save_key = edits["deepl"], show, save
 
-    def _show_key(self, shown):
-        self.deepl_key.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
-        self.show_key.setText("Hide" if shown else "Show")
+    @staticmethod
+    def _translator_label(key):
+        return lens_translate.CHOICES.get(key, key).split(" — ")[0]
+
+    def _show_keys(self, translator, shown, button):
+        for edit in self.key_edits[translator].values():
+            edit.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
+        button.setText("Hide" if shown else "Show")
+
+    def save_keys_of(self, translator):
+        edits = self.key_edits[translator]
+        self.lens.set_api_keys(translator, {name: edit.text() for name, edit in edits.items()})
+        for name, edit in edits.items():
+            edit.setText(self.lens.cfg["api_keys"].get(name, ""))
 
     def save_deepl_key(self):
-        self.lens.set_api_key("deepl", self.deepl_key.text())
-        self.deepl_key.setText(self.lens.cfg["api_keys"].get("deepl", ""))
+        self.save_keys_of("deepl")
 
     def _appearance_page(self):
         layout = self._page("Appearance", "How the translations look over the screen. Every change shows at once.")

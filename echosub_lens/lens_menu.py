@@ -13,7 +13,7 @@ PEEK_CHOICES = ((0, "Never"), (1, "Every second"), (2, "Every 2 seconds"), (5, "
 LANGUAGE_SETTINGS = "ms-settings:regionlanguage"
 
 
-ONLINE_TRANSLATORS = ("google", "bing", "mymemory", "deepl")
+ONLINE_TRANSLATORS = getattr(lens_translate, "ONLINE", {"google", "bing", "mymemory", "deepl"})
 TRANSLATOR_HELP = {  # used until lens_translate.HELP has a line for the key
     lens_translate.SAME: "EchoSub's translator when EchoSub is on this PC; otherwise Google Translate.",
     "google": "Online and fast. Uses no memory and no graphics card, but needs the internet and sends the text to "
@@ -21,6 +21,8 @@ TRANSLATOR_HELP = {  # used until lens_translate.HELP has a line for the key
     "bing": "Online, from Microsoft. Needs the internet and sends the text to Microsoft.",
     "mymemory": "Online and free, but only a limited amount of text per day. Sends the text to MyMemory.",
     "deepl": "Online and very natural. Needs your own free DeepL key (below) and sends the text to DeepL.",
+    "yandex": "Online, from Yandex. Needs the internet and sends the text to Yandex.",
+    "papago": "Online, from Naver. Best for Korean, Japanese and Chinese; 16 languages. Sends the text to Naver.",
     "nllb-600m": "Offline, on your graphics card (or the processor). Private: nothing leaves your PC. "
                  "About 600 MB, downloaded the first time you choose it.",
     "nllb-1.3b": "Offline and more accurate, but slower and needs more memory. Private: nothing leaves your PC. "
