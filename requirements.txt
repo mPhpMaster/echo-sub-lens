@@ -1,0 +1,19 @@
+# EchoSub Lens runtime dependencies (Python 3.10, Windows 10 2004+ / 11, x64). Versions pinned to the tested set.
+PySide6==6.11.2
+numpy==2.2.6
+# Translation: NLLB-200 offline (CTranslate2) or Google Translate
+ctranslate2==4.8.2
+sentencepiece==0.2.2
+deep-translator==1.11.4
+huggingface_hub==1.31.0
+requests==2.34.2
+# Windows' own text recognition (OCR) through WinRT
+winrt-runtime==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Globalization==3.2.1
+winrt-Windows.Graphics.Imaging==3.2.1
+winrt-Windows.Media.Ocr==3.2.1
+winrt-Windows.Storage.Streams==3.2.1
+# Development only
+flake8

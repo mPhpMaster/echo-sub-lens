@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Build output
+build/
+dist/
+
+# Local runtime data (created when running from source)
+models/
+logs/
+lens.json
+tests/_data/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
