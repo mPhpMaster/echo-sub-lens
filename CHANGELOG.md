@@ -15,3 +15,4 @@ First release as a project of its own. Lens also ships inside [EchoSub](https://
 - **Appearance:** font, size, bold, text and background colours, opacity and rounded corners, applied live.
 - **A key for every option:** any key or combination, set in *Settings → Keyboard shortcuts*.
 - Offline OCR with Windows' own text recognition; offline translation with NLLB-200, or Google Translate.
+- **Windows installer** (`EchoSubLens-Setup-1.0.0.exe`): installs for your user without administrator rights, with a Start-menu entry and an optional start with Windows.

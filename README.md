@@ -55,6 +55,11 @@ captions for anything your PC plays), released here as a project of its own. It 
 - An NVIDIA graphics card is optional: NLLB runs on the processor too (it uses EchoSub's NVIDIA libraries if they
   are there).
 
+## Install
+
+Download `EchoSubLens-Setup-<version>.exe` from [Releases](https://github.com/mPhpMaster/echo-sub-lens/releases)
+and run it — no administrator rights needed. You can check the download against the `.sha256` file next to it.
+
 ## Run from source
 
 ```bat
@@ -66,6 +71,17 @@ run.bat
 Or `.venv\Scripts\python -m echosub_lens [file]` — a file name opens that file to translate.
 Settings are kept in `lens.json` and the log in `logs\lens.log`, in the project folder (or in
 `%LOCALAPPDATA%\EchoSubLens` for a built copy; `ECHOSUB_LENS_DATA_DIR` overrides it).
+
+## Build the installer
+
+Needs Python 3.10 and [Inno Setup 6](https://jrsoftware.org/isdl.php).
+
+```bat
+powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+```
+
+It builds `dist\EchoSubLens\EchoSubLens.exe` with PyInstaller (`scripts\build.ps1`), then
+`dist\installer\EchoSubLens-Setup-<version>.exe` and its SHA-256 hash.
 
 ## Tests
 
