@@ -190,6 +190,30 @@ class CaptureWindowTest(unittest.TestCase):
         self.assertIn("[google:ar]", window.text_box.toPlainText())
         self.assertTrue(window.suggested_name().endswith(" (Arabic).png"))
 
+    def test_each_line_of_the_picture_on_its_own_line(self):
+        # two lines close together are one block (translated as one text), yet two lines in the text box
+        FakeReader.lines = [line("Save the file", 10, 10), line("before closing it", 10, 38),
+                            line("Open the settings", 10, 120), line("Close", 10, 170)]
+        window, lens = self.window()
+        self.assertTrue(wait_for(lambda: window.finished), window.status.text())
+        self.assertEqual(lens.made[0].calls,
+                         [(["Save the file before closing it", "Open the settings", "Close"], "ar")])
+        self.assertEqual(window.text_box.toPlainText().split("\n"),
+                         ["[google:ar] Save the", "file before closing it", "", "[google:ar] Open the settings",
+                          "[google:ar] Close"])
+        window.copy_text_button.click()
+        self.assertEqual(QGuiApplication.clipboard().text(), window.text_box.toPlainText())
+        window.original_button.click()
+        self.assertEqual(window.text_box.toPlainText(),
+                         "Save the file\nbefore closing it\n\nOpen the settings\nClose")
+        window.copy_text_button.click()
+        self.assertEqual(QGuiApplication.clipboard().text(),
+                         "Save the file\nbefore closing it\n\nOpen the settings\nClose")
+
+    def test_shown_text(self):
+        self.assertEqual(lens_capture_window.shown_text([["a"], ["b", "c"], ["d"], ["e"]]), "a\n\nb\nc\n\nd\ne")
+        self.assertEqual(lens_capture_window.shown_text([]), "")
+
     def test_copy_text_strips_direction_marks(self):
         window, lens = self.window(FakeLens(mark=RLM))
         self.assertTrue(wait_for(lambda: window.finished))
@@ -260,6 +284,22 @@ class CaptureWindowTest(unittest.TestCase):
         self.assertIn("[bing:de] Open the settings", window.text_box.toPlainText())
         self.assertEqual(len(lens.made), 2)  # the language changed, not the translator
         self.assertEqual(lens.released, [lens.made[0]])
+
+    def test_a_new_key_gives_a_new_translator_and_translates_again(self):
+        window, lens = self.window(FakeLens(translator="deepl"))
+        self.assertTrue(wait_for(lambda: window.finished))
+        first = window.translator
+        self.assertFalse(window.key_changed("bing"))  # another service: nothing changes
+        self.assertEqual(lens.made, [first])
+        self.assertTrue(window.key_changed("deepl"))
+        self.assertEqual(len(lens.made), 2)
+        self.assertIs(window.translator, lens.made[1])
+        self.assertEqual(lens.released, [first])
+        self.assertTrue(wait_for(lambda: window.finished))
+        self.assertEqual(len(lens.made[1].calls), 1)  # translated again, with the new one
+        self.assertEqual(len(FakeReader.made), 1)  # not read again
+        window.release()
+        self.assertFalse(window.key_changed("deepl"))  # closing: nothing more
 
     def test_retranslating_does_not_read_again(self):
         window, lens = self.window()

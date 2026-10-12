@@ -32,6 +32,40 @@ class WordOrderTest(unittest.TestCase):
         self.assertEqual(logical_text(["Original", "/", ":Translated"], True), "Original / Translated:")
         self.assertEqual(logical_text(["Original", "/", ":Translated"], False), "Original / :Translated")
 
+    def test_mixed_lines_as_windows_arabic_recognizer_read_them(self):
+        # the words Windows' ar-SA recognizer returned (left to right on the screen) for lines drawn with Qt,
+        # first in a left-to-right layout, then in a right-to-left one: both read the same
+        cases = {
+            "Original / Translated: الصورة مع الترجمة": (
+                ["Original", "/", ":Translated", "الترجمة", "مع", "الصورة"],
+                ["الترجمة", "مع", "الصورة", "Original:", "/", "Translated"]),
+            "Translate into و with: يعيد الترجمة": (
+                ["Translate", "into", "و", ":with", "الترجمة", "يعيد"],
+                ["الترجمة", "يعيد", "with:", "و", "Translate", "into"]),
+            "Save as: احفظ باسم": (["Save", ":as", "باسم", "احفظ"], ["باسم", "احفظ", "Save:", "as"]),
+            "File name: اسم الملف": (["File", ":name", "الملف", "اسم"], ["الملف", "اسم", "File:", "name"]),
+            "الإعدادات: Settings": (["Settings", "الإعدادات:"],),
+            "الإعدادات العامة: General Settings": (["General", "Settings", "العامة:", "الإعدادات"],),
+            "اللغة: English": (["English", "اللغة:"],),
+            "افتح الملف في Notepad الآن.": (["الآن.", "Notepad", "في", "الملف", "افتح"],),
+            "Note: see the docs في المجلد": ([":Note", "see", "the", "docs", "المجلد", "في"],),
+            "هل حفظت الملف؟ نعم، حفظته.": (["حفظته.", "نعم،", "الملف؟", "حفظت", "هل"],),
+        }
+        for text, readings in cases.items():
+            for words in readings:
+                self.assertEqual(logical_text(words, True), text, words)
+
+    def test_an_english_recognizer_sees_the_marks_where_they_are(self):
+        # what Windows' en-US recognizer returned for "Original / Translated: …" in a right-to-left layout
+        self.assertEqual(logical_text(["الترجمة", "مع", "الصورة", ":Original", "/", "Translated"]),
+                         "Original / Translated: الصورة مع الترجمة")
+        self.assertEqual(logical_text(["Original", "/", "Translated:", "الترجمة", "مع", "الصورة"]),
+                         "Original / Translated: الصورة مع الترجمة")
+
+    def test_english_read_by_an_arabic_recognizer(self):
+        self.assertEqual(logical_text([",Hello", "world.", "Is", "it", "done?", "!Yes"], True),
+                         "Hello, world. Is it done? Yes!")
+
     def test_english_alone_is_untouched(self):
         self.assertEqual(visual("Save the file before closing").text, "Save the file before closing")
 
@@ -51,7 +85,7 @@ class QualityTest(unittest.TestCase):
                   visual("الإغلاق قبل الملف احفظ", 120, True)]
         lines = best_lines([english, arabic])
         self.assertEqual([line.text for line in lines],
-                         ["الصورة مع الترجمة Original / Translated:", "Save the file before closing",
+                         ["Original / Translated: الصورة مع الترجمة", "Save the file before closing",
                           "احفظ الملف قبل الإغلاق"])
         self.assertIs(lines[1], english[1])  # a tie: the main recognizer's reading
 

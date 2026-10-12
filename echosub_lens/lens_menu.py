@@ -88,6 +88,11 @@ class LensMenuMixin:
     def _build_menu(self):
         """In groups: open and start; what to translate; languages; where translations show; the rest."""
         m = QMenu()
+        release = getattr(self, "new_release", None)
+        if release:  # a newer version is out: its page, in the browser (Lens downloads nothing by itself)
+            self.act_update = m.addAction(f"⬆ Update to {release[0]}…", self.open_update)
+            self.act_update.setToolTip("Opens its page in your browser")
+            m.addSeparator()
         opener = m.addAction("Open EchoSub Lens…", lambda: self.open_window())
         m.setDefaultAction(opener)  # shown in bold: what a click on the icon does
         self.act_running = self._item(m, "Translating", "toggle", self.toggle, checkable=True,

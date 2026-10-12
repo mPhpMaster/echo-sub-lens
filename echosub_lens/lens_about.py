@@ -6,10 +6,10 @@ import sys
 
 from PySide6.QtCore import QRectF, QSize, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from . import (APP_NAME, AUTHOR, AUTHOR_EMAIL, COPYRIGHT, DESCRIPTION, DONATE_URL, LICENSE_NAME, LINKS, REPO_URL,
-               __version__, config)
+               __version__, config, lens_update)
 
 AVATAR_NAMES = ("author.png", "author.jpg", "author.jpeg")
 ACCENT = "#14B8A6"
@@ -65,10 +65,13 @@ def avatar_pixmap(size):
 
 
 class AboutPage(QWidget):
-    """Who made Lens and how to reach him. `on_support` opens the donation page (Lens says thank you)."""
+    """Who made Lens and how to reach him. `on_support` opens the donation page (Lens says thank you).
+    With `lens` (LensApp): "Check for updates" and "Check for new versions automatically" too."""
 
-    def __init__(self, on_support=None, parent=None):
+    def __init__(self, on_support=None, parent=None, lens=None):
         super().__init__(parent)
+        self.lens = lens
+        self.release = None  # (version, url, notes) found by the last check
         self.setObjectName("about")
         self.setStyleSheet(f"""
             QPushButton#link {{ background: transparent; color: #E5E7EB; border: 1px solid #2B3432;
@@ -137,6 +140,9 @@ class AboutPage(QWidget):
         support.addStretch(1)
         root.addLayout(support)
 
+        if lens is not None:
+            self._updates(root)
+
         docs = QHBoxLayout()
         docs.addStretch(1)
         for i, (label, target) in enumerate(DOCUMENTS):
@@ -155,6 +161,79 @@ class AboutPage(QWidget):
         self.legal.setStyleSheet("font-size: 8.5pt;")
         root.addWidget(self.legal)
         root.addStretch(1)
+
+    # ---- updates ---------------------------------------------------------------
+    def _updates(self, root):
+        """A button that asks GitHub (in the background), the answer in words, and the automatic check."""
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addStretch(1)
+        self.check_button = QPushButton("Check for updates")
+        self.check_button.setObjectName("link")
+        self.check_button.setCursor(Qt.PointingHandCursor)
+        self.check_button.clicked.connect(self.check_for_updates)
+        row.addWidget(self.check_button)
+        self.update_status = QLabel("")
+        self.update_status.setObjectName("muted")
+        row.addWidget(self.update_status)
+        self.download_button = QPushButton("Download")
+        self.download_button.setObjectName("link")
+        self.download_button.setCursor(Qt.PointingHandCursor)
+        self.download_button.clicked.connect(lambda: self.release and open_target(self.release[1]))
+        row.addWidget(self.download_button)
+        self.skip_button = QPushButton("Skip this version")
+        self.skip_button.setObjectName("small")
+        self.skip_button.setCursor(Qt.PointingHandCursor)
+        self.skip_button.clicked.connect(self.skip_version)
+        row.addWidget(self.skip_button)
+        row.addStretch(1)
+        root.addSpacing(6)
+        root.addLayout(row)
+        self.download_button.hide()
+        self.skip_button.hide()
+
+        auto = QHBoxLayout()
+        auto.addStretch(1)
+        self.auto_check_box = QCheckBox("Check for new versions automatically")
+        self.auto_check_box.setToolTip("Once a day Lens asks GitHub for the latest version number. "
+                                       "Nothing about you is sent.")
+        self.auto_check_box.setChecked(bool(self.lens.cfg.get("check_updates", True)))
+        self.auto_check_box.toggled.connect(self.lens.set_check_updates)
+        auto.addWidget(self.auto_check_box)
+        auto.addStretch(1)
+        root.addLayout(auto)
+        if getattr(self.lens, "new_release", None):  # found by the automatic check
+            self.show_release(self.lens.new_release)
+
+    def check_for_updates(self):
+        """Ask GitHub now, in the background: the window keeps answering."""
+        self.check_button.setEnabled(False)
+        self.update_status.setText("Checking…")
+        self.download_button.hide()
+        self.skip_button.hide()
+        self.lens.check_for_updates(done=self.show_release)
+
+    def show_release(self, release):
+        """The answer in words: the latest version, a newer one (Download / Skip), or no answer."""
+        self.check_button.setEnabled(True)
+        self.release = release
+        newer = release is not None and lens_update.newer(release[0], __version__)
+        if release is None:
+            self.update_status.setText("Could not check: no internet")
+        elif newer:
+            self.update_status.setText(f"<b>{release[0]}</b> is out —")
+            self.download_button.setToolTip(release[1])
+        else:
+            self.update_status.setText(f"You have the latest version ({__version__})")
+        self.download_button.setVisible(newer)
+        self.skip_button.setVisible(newer)
+
+    def skip_version(self):
+        if self.release:
+            self.lens.skip_update(self.release[0])
+            self.update_status.setText(f"Version {self.release[0]} skipped")
+        self.download_button.hide()
+        self.skip_button.hide()
 
     @staticmethod
     def _button(label, target, style, on_click=None):

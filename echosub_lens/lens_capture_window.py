@@ -21,6 +21,7 @@ from . import languages, lens_files, lens_ocr, lens_style, lens_translate
 from .lens_about import ACCENT
 from .lens_file_window import TRANSLATOR_HINTS
 from .lens_menu import fill_translator_combo
+from .lens_overlay import split_like
 from .lens_text_window import plain, reading_order
 from .lens_window import STYLE
 
@@ -85,6 +86,17 @@ def needs_translation(block, target):
 def translated(block):
     """The block was really translated: something to draw over the picture."""
     return bool(block.translation) and block.translation.strip() != block.text.strip()
+
+
+def shown_text(blocks):
+    """The text box: each line of the picture on a line of its own (`blocks` holds the lines of each block);
+    a block of several lines (a paragraph) stands apart from the rest with an empty line."""
+    out = []
+    for lines in blocks:
+        if out and (len(lines) > 1 or out[-1][1]):
+            out.append(("", False))
+        out.extend((text, len(lines) > 1) for text in lines)
+    return "\n".join(text for text, _ in out)
 
 
 class _Signals(QObject):
@@ -294,6 +306,14 @@ class CaptureWindow(QWidget):
         if previous is not None and previous is not self.translator:
             self.lens.release_translator(previous)  # does nothing to the translator Lens itself uses
 
+    def key_changed(self, service):
+        """The user's key for the translator `service` changed: a translator of that service is replaced by a
+        new one (with the new key), and the text is translated again. True when it was."""
+        if self._released or getattr(self.translator, "key", None) != service:
+            return False
+        self.set_translator(self.translator_choice)
+        return True
+
     @staticmethod
     def _sync_combo(combo, value):
         index = combo.findData(value)
@@ -420,12 +440,13 @@ class CaptureWindow(QWidget):
         return image
 
     def original_text(self):
-        return "\n".join(b.text for b in self.blocks)
+        return shown_text([[line.text for line in b.lines] for b in self.blocks])
 
     def translated_text(self):
         if not self.finished:
             return ""
-        return "\n".join(b.translation if translated(b) else b.text for b in self.blocks)
+        return shown_text([split_like(b.translation, len(b.lines)).split("\n") if translated(b)
+                           else [line.text for line in b.lines] for b in self.blocks])
 
     def current_text(self):
         return self.translated_text() if self.view == TRANSLATED else self.original_text()

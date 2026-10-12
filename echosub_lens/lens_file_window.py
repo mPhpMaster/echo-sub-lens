@@ -183,6 +183,14 @@ class FileWindow(QWidget):
         self._notify(f"Translating {os.path.basename(self.path)} into {languages.name(self.target)} "
                      f"with {lens_translate.CHOICES.get(choice, choice).split(' — ')[0]}")
 
+    def key_changed(self, service):
+        """The user's key for the translator `service` changed: a translator of that service is replaced by a
+        new one (with the new key), and the file is translated again. True when it was."""
+        if self._choose_translator is None or getattr(self.translator, "key", None) != service:
+            return False
+        self.set_translator(self.translator_choice)
+        return True
+
     @staticmethod
     def _sync_combo(combo, value):
         index = combo.findData(value)

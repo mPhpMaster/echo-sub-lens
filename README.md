@@ -43,6 +43,10 @@ The pictures are made by `scripts\screenshots.py`.
 - **Reset this page** on every settings page puts its settings back to the defaults.
 - *About*: the version, the author and his links (GitHub, LinkedIn, Discord, email), the license, the changelog
   and the source code.
+- **New versions:** once a day Lens asks GitHub whether a newer version is out; when one is, it says so on the
+  screen and the right-click menu gets *⬆ Update to …* (it opens the release page — Lens never downloads or runs
+  anything by itself). *Check for updates* on the *About* page asks now; *Skip this version* or untick *Check for
+  new versions automatically* to stop being told.
 
 **What to translate**
 - **An area** you drag on any screen (`Ctrl+Alt+R`), or **a whole screen** — one of your monitors.
@@ -199,6 +203,10 @@ translated — Google (Google Translate), Microsoft (Bing Translator), MyMemory 
 or Naver (Papago) — and that
 service's privacy policy applies. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
 settings file on your PC and sent only to DeepL. Lens keeps no history of what it read.
+
+Once a day Lens asks GitHub (api.github.com) for the number of the latest version. Nothing about you is sent —
+no text, no key, no account or ID, only the name and version of Lens — and nothing is downloaded or installed by
+itself. Untick *Check for new versions automatically* on the *About* page to turn it off.
 
 ## Support the developer
 

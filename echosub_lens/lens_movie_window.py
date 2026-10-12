@@ -472,6 +472,12 @@ class MovieWindow(QWidget):
         self.status.setText(text)
         self.left_label.setText(time_left(time.monotonic() - self._phase_started, fraction))
 
+    def key_changed(self, service):
+        """The user's key for the translator `service` changed. A run keeps the translator it started with;
+        each run asks Lens for its translator, so the next one has the new key. True when the run now going
+        uses that service."""
+        return getattr(self._translator, "key", None) == service
+
     def _release_translator(self):
         translator, self._translator = self._translator, None
         if translator is not None:

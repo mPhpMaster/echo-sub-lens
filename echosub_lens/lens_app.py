@@ -44,6 +44,9 @@ DEFAULTS = {
     "overlay_visible": True,     # the translations over the screen (turned off from the translation window)
     "window_geometry": None,     # [x, y, w, h] of the EchoSub Lens window (a click on the tray icon opens it)
     "api_keys": {"deepl": ""},   # the user's own keys for online translators that need one (Translator page)
+    "check_updates": True,       # ask GitHub once a day whether a newer version is out (About page)
+    "update_checked": 0,         # when it last asked (unix time): at most once a day, across restarts
+    "update_skipped": "",        # a version the user chose to skip
 }
 
 

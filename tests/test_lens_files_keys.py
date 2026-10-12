@@ -173,6 +173,35 @@ class TextAndPagesTest(unittest.TestCase):
                 window.write(path)  # never over the original
             window.close()
 
+    def test_a_new_key_gives_the_file_window_a_new_translator(self):
+        from echosub_lens.lens_file_window import FileWindow
+
+        class Keyed(Upper):
+            def __init__(self, key):
+                self.key = key
+
+        made, released = [], []
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "notes.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("Buy milk\n")
+            first = Keyed("deepl")
+            window = FileWindow(path, "fr", first, "auto", lens_style.merged(None),
+                                choose_translator=lambda choice: made.append(choice) or Keyed("deepl"),
+                                release_translator=released.append, translator_choice="deepl")
+            self.assertFalse(window.key_changed("bing"))  # another service: nothing changes
+            self.assertEqual(made, [])
+            self.assertTrue(window.key_changed("deepl"))
+            self.assertEqual(made, ["deepl"])
+            self.assertEqual(released, [first])
+            self.assertIsNot(window.translator, first)
+            deadline = time.monotonic() + 10
+            while not window.finished and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.01)
+            self.assertEqual(window.text_view.toPlainText(), "BUY MILK\n")  # translated again
+            window.close()
+
 
 class AppKeysTest(unittest.TestCase):
     def test_keys_are_registered_and_shown_in_the_menu(self):

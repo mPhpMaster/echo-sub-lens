@@ -67,28 +67,90 @@ def _left_to_right(word):
     return any(unicodedata.bidirectional(ch) in ("L", "EN", "AN") for ch in word)
 
 
-def logical_text(words, rtl_reader=False):
-    """`words` as Windows found them, left to right on the screen, in the order they are read. Windows hands an
-    Arabic line over left to right — "الإغلاق قبل الملف احفظ" for "احفظ الملف قبل الإغلاق" — so its runs of
-    right-to-left words are turned around, and so is the line itself when most of it is right to left. An Arabic
-    recognizer also puts the colon of an English word in front of it (":Translated"): put back."""
-    if rtl_reader:
-        words = [w[1:] + w[0] if len(w) > 1 and w[0] in _LEADING_MARKS and not _right_to_left(w)
-                 and w[-1] not in _LEADING_MARKS else w for w in words]
-    if not any(_right_to_left(w) for w in words):
-        return " ".join(words)
-    runs = []  # [(right_to_left, [words])]: a word with no letters of its own stays with the run before it
+_MARKS = _LEADING_MARKS + "،؛؟"
+
+
+def _leading_mark(word):
+    """An English word with a mark in front of it and none behind (":Translated")."""
+    return (len(word) > 1 and word[0] in _LEADING_MARKS and word[-1] not in _MARKS and _left_to_right(word)
+            and not _right_to_left(word))
+
+
+def _trailing_mark(word):
+    """A word with a mark behind it and none in front ("Translated:", "الملف؟")."""
+    return len(word) > 1 and word[-1] in _MARKS and word[0] not in _MARKS
+
+
+def _runs(words):
+    """[(right_to_left, [words])]: a word with no letters of its own stays with the run before it."""
+    runs = []
     for word in words:
         rtl = _right_to_left(word) or (not _left_to_right(word) and bool(runs) and runs[-1][0])
         if runs and runs[-1][0] == rtl:
             runs[-1][1].append(word)
         else:
             runs.append((rtl, [word]))
-    runs = [(rtl, list(reversed(group)) if rtl else group) for rtl, group in runs]
+    return runs
+
+
+def _as_seen(runs):
+    """An Arabic recognizer puts the mark of an English word on its other side: ":Translated" for
+    "Translated:" (the mark on the right on the screen), and "Original:" for ":Original" where the mark stands
+    at the left of the English words, after Arabic words — there it is the end of the English words in a line
+    read right to left. Turned back to what is on the screen."""
+    for i, (rtl, group) in enumerate(runs):
+        if rtl:
+            continue
+        for j, word in enumerate(group):
+            if _leading_mark(word):
+                group[j] = word[1:] + word[0]
+            elif j == 0 and i > 0 and _trailing_mark(word) and not _right_to_left(word):
+                group[j] = word[-1] + word[:-1]
+    return runs
+
+
+def _starts_at_the_right(runs, words):
+    """Whether a mixed line is read right to left. The word a mark (":") belongs to comes first: an English
+    "Save as:" with Arabic to its right is an English line; ":Original / Translated" or "الإعدادات:" with
+    English to its left is an Arabic one. Otherwise: most of the words."""
+    left_to_right = right_to_left = 0
+    for i, (rtl, group) in enumerate(runs):
+        if rtl:
+            right_to_left += _trailing_mark(group[0]) and i > 0  # its last word, on the left: English beside it
+        else:
+            left_to_right += _trailing_mark(group[-1]) and i + 1 < len(runs)
+            right_to_left += _leading_mark(group[0]) and i > 0
+    if left_to_right != right_to_left:
+        return right_to_left > left_to_right
     rtl_words = sum(len(group) for rtl, group in runs if rtl)
-    if rtl_words * 2 >= len(words):  # mostly right to left: the line starts at the right
-        runs.reverse()
-    return " ".join(word for _, group in runs for word in group)
+    return rtl_words * 2 >= len(words)
+
+
+def logical_text(words, rtl_reader=False):
+    """`words` as Windows found them, left to right on the screen, in the order they are read. Windows hands an
+    Arabic line over left to right — "الإغلاق قبل الملف احفظ" for "احفظ الملف قبل الإغلاق" — so its runs of
+    right-to-left words are turned around, and so is the line itself when it is read right to left. An Arabic
+    recognizer also puts the mark of an English word on the wrong side (":Translated"): put back."""
+    words = list(words)
+    if not any(_right_to_left(w) for w in words):
+        if rtl_reader:
+            words = [w[1:] + w[0] if _leading_mark(w) else w for w in words]
+        return " ".join(words)
+    runs = _runs(words)
+    if rtl_reader:
+        runs = _as_seen(runs)
+    if not _starts_at_the_right(runs, words):
+        return " ".join(word for rtl, group in runs for word in (reversed(group) if rtl else group))
+    ordered = []
+    for rtl, group in reversed(runs):
+        if rtl:
+            ordered.extend(reversed(group))
+            continue
+        if _leading_mark(group[0]):  # ":Original / Translated" on the screen: "Original / Translated:"
+            mark, group = group[0][0], [group[0][1:]] + group[1:]
+            group[-1] += mark
+        ordered.extend(group)
+    return " ".join(ordered)
 
 
 # ---- which recognizer read a line best ------------------------------------------

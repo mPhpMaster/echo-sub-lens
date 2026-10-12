@@ -225,6 +225,25 @@ class TranslatorChoicesTest(unittest.TestCase):
         self.assertEqual(self.lens.cfg["translator"], "same")
         self.assertEqual(self.lens.cfg["api_keys"]["deepl"], "new-key")
 
+    def test_a_new_key_reaches_the_open_file_capture_and_movie_windows(self):
+        class Job:
+            def __init__(self):
+                self.changed = []
+
+            def key_changed(self, service):
+                self.changed.append(service)
+
+        files, captures, movie = [Job(), Job()], [Job()], Job()
+        self.lens.file_windows[:], self.lens.capture_windows[:], self.lens.movie_window = files, captures, movie
+        self.lens.cfg["api_keys"] = {"deepl": "old-key"}
+        self.lens.set_api_keys("deepl", {"deepl": "new-key"})
+        for job in files + captures + [movie]:
+            self.assertEqual(job.changed, ["deepl"])
+        self.lens.set_api_keys("deepl", {"deepl": "new-key"})  # the same key again: nothing to do
+        self.lens.set_api_keys("deepl", {"deepl": ""})  # no key: the windows keep what they have
+        self.assertEqual(movie.changed, ["deepl"])
+        self.lens.file_windows[:], self.lens.capture_windows[:], self.lens.movie_window = [], [], None
+
     def test_deepl_without_a_key_says_so_and_opens_the_page(self):
         with mock.patch.object(lens_ui.translate, "create") as create:
             self.lens.set_translator("deepl")

@@ -510,7 +510,7 @@ class LensWindow(QWidget):
 
     def _about_page(self):
         layout = self._page("About", "")
-        self.about = AboutPage(on_support=self.lens.donate)
+        self.about = AboutPage(on_support=self.lens.donate, lens=self.lens)
         layout.addWidget(self.about)
         layout.addStretch(1)
 

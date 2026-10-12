@@ -3,6 +3,16 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] — 2026-10-12
+
+### Added
+- **New versions are announced.** Once a day Lens asks GitHub for the latest version number (nothing about you is sent); when there is a newer one, a note says so and the menu offers *Update to …*, which opens the download page. The *About* page has *Check for updates*, *Skip this version*, and a box to turn the daily check off.
+
+### Fixed
+- The capture window keeps every line of the picture on a line of its own, in the original and in the translation.
+- A colon or a question mark in a line that mixes Arabic and English is back where it belongs.
+- A new DeepL key reaches the file, movie and capture windows already open, not only the screen.
+
 ## [1.8.1] — 2026-10-12
 
 ### Fixed

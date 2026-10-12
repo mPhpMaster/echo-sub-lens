@@ -16,6 +16,7 @@ from . import (app_windows, config, downloads, hotkeys, languages, lens_capture,
                lens_shortcuts, lens_translate, translate)
 from .lens_busy import Activity, BusyIndicator
 from .lens_app import LENS_NAME, ctrl_held
+from . import lens_update
 from .lens_menu import LensMenuMixin
 from .lens_overlay import LensOverlay
 from .lens_picker import CAPTURE_HINT, RegionPicker
@@ -50,6 +51,11 @@ class MissingKey(RuntimeError):
 class _KeyRequest(QObject):
     """From the thread that loads a translator to the Qt thread: a key is needed (opens the Translator page)."""
     needed = Signal(str)
+
+
+class _UpdateAnswer(QObject):
+    """From the thread that asks GitHub to the Qt thread: (latest_release() or None, what to call with it)."""
+    arrived = Signal(object)
 
 
 def lens_icon(active):
@@ -135,6 +141,7 @@ class LensApp(LensMenuMixin):
         QGuiApplication.instance().screenAdded.connect(lambda _: self._fill_screens())
         QGuiApplication.instance().screenRemoved.connect(lambda _: self._fill_screens())
         self.start()
+        self._start_update_checks()
 
     # ---- what every menu item and key does -----------------------------------
     def actions(self):
@@ -288,7 +295,8 @@ class LensApp(LensMenuMixin):
 
     def set_api_keys(self, service, values):
         """Save the user's keys for the translator `service` ({name in api_keys: value}); a translator of that
-        service already loaded is switched off, so the next text is translated with the new keys."""
+        service already loaded is switched off, so the next text is translated with the new keys; open file and
+        capture windows using that service get a new one and translate again."""
         values = {name: (value or "").strip() for name, value in values.items()}
         key = all(values.values())
         keys = dict(self.cfg.get("api_keys") or {})
@@ -303,6 +311,13 @@ class LensApp(LensMenuMixin):
             self._switch_off(service, self._translators.pop(service))
         self._notify(f"{self._translator_name(service)} key saved" if key else
                      f"{self._translator_name(service)} key removed")
+        if key:  # the open files, pictures and the movie window take a translator with the new key too
+            jobs = list(self.file_windows) + list(self.capture_windows) + [self.movie_window]
+            for window in [w for w in jobs if w is not None]:
+                try:
+                    window.key_changed(service)
+                except RuntimeError:
+                    pass  # its Qt window is already gone
         if lens_translate.resolve(self.cfg["translator"], self.base_cfg) != service:
             return
         if self.scanner.running:
@@ -390,6 +405,64 @@ class LensApp(LensMenuMixin):
 
     def _notify(self, text):
         self.activity.tell(text)  # on the screen, in the corner
+
+    # ---- updates: GitHub is asked once a day; Lens says so, it never downloads by itself ----------
+    def _start_update_checks(self):
+        self.new_release = None      # (version, url, notes) of a newer version not skipped
+        self._update_answer = _UpdateAnswer()
+        self._update_answer.arrived.connect(self._update_arrived)
+        self._update_timer = QTimer()
+        self._update_timer.timeout.connect(self._update_tick)
+        if lens_update.automatic_allowed():
+            self._update_timer.start(lens_update.FIRST_CHECK_MS)
+
+    def _update_tick(self):
+        self._update_timer.setInterval(lens_update.TICK_MS)  # then hourly: is a day up since the last check?
+        self.check_for_updates()
+
+    def check_for_updates(self, done=None):
+        """Ask GitHub in the background. Automatic (`done` None): only when on and a day after the last check.
+        From the About page: always, and `done(latest_release() or None)` is called in the Qt thread."""
+        now = time.time()
+        if done is None and not lens_update.due(self.cfg, now):
+            return False
+        self._set(update_checked=int(now))
+        lens_update.in_background(lambda: self._update_answer.arrived.emit((lens_update.latest_release(), done)))
+        return True
+
+    def _update_arrived(self, answer):
+        from . import __version__
+
+        release, done = answer
+        if release is not None:
+            wanted = lens_update.newer(release[0], __version__) and release[0] != self.cfg["update_skipped"]
+            before = self.new_release
+            self.new_release = release if wanted else None
+            if (before and before[0]) != (self.new_release and self.new_release[0]):
+                self.refresh_menu()
+                if self.new_release and done is None:  # from the About page: the page says it
+                    self._notify(f"{LENS_NAME} {release[0]} is out — open the About page to get it")
+        if done is not None:
+            done(release)
+
+    def open_update(self):
+        """The page of the new version, in the browser (the user downloads and runs it)."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        version = self.new_release[0] if self.new_release else None
+        QDesktopServices.openUrl(QUrl(lens_update.release_page(version)))
+
+    def skip_update(self, version):
+        """Not this version: no note and no menu item for it (a newer one is said again)."""
+        self._set(update_skipped=version)
+        if self.new_release and self.new_release[0] == version:
+            self.new_release = None
+            self.refresh_menu()
+        self._notify(f"Version {version} skipped")
+
+    def set_check_updates(self, on):
+        self._set(check_updates=bool(on))
 
     # ---- the area ------------------------------------------------------------
     def area(self):
@@ -900,6 +973,7 @@ class LensApp(LensMenuMixin):
                      else "Not looking under the translations")
 
     def quit(self):
+        self._update_timer.stop()
         self.scanner.stop()
         self.scanner.capturer.close()
         self.hotkeys.disable()
