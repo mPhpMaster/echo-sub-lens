@@ -24,8 +24,8 @@ captions for anything your PC plays), released here as a project of its own. It 
 | *The translation window: a dialogue keeps a line, and its dash, for each speaker* | *About: version, author, links and ♥ support* |
 | ![Transparent translation window](docs/images/translation-window-transparent.png) | ![The right-click menu](docs/images/tray-menu.png) |
 | *Transparent, as much as you like: only the words stay solid* | *The right-click menu, in groups* |
-| ![Movie to subtitles](docs/images/movie-window.png) | |
-| *A movie to an .srt file: from its own subtitles, its speech or the text in its picture* | |
+| ![Movie to subtitles](docs/images/movie-window.png) | ![Capture part of the screen](docs/images/capture-window.png) |
+| *A movie to an .srt file: from its own subtitles, its speech or the text in its picture* | *Capture part of the screen: its text, original or translated, to copy — or save the picture* |
 
 <p align="center"><img src="docs/images/progress-note.png" alt="A note in the corner of the screen while Lens translates"><br>
 <i>Everything Lens does shows in a small note in the corner of the screen.</i></p>
@@ -63,6 +63,10 @@ The pictures are made by `scripts\screenshots.py`.
   (`Movie.ar.srt`) is saved next to the first — numbers and times kept, a two-line subtitle still two lines, each
   speaker of a dialogue on a line of their own with their dash. *Translate the subtitles…* opens them in the file
   translator, in the language and with the translator chosen.
+- **Capture part of the screen** (`Ctrl+Alt+S`, *Capture part of the screen…* in the menu, or *Capture* in the
+  window): drag a rectangle and its picture opens in a window of its own with the text in it — **the original or
+  translated**. Select and copy the text, **save the picture**, or cancel. Lens's own
+  translations and windows are left out of the picture, and the screen translation goes on as before.
 
 **The translated text in a window of its own**
 - **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —

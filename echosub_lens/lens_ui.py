@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Mohammad Al-Safadi
 """EchoSub Lens: its icon by the clock, its keys, and what ties the scanner to the overlay."""
+import ctypes
 import logging
 import os
+import sys
 import threading
 import time
 
@@ -10,19 +12,35 @@ from PySide6.QtCore import QObject, QRect, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QSystemTrayIcon
 
-from . import (app_windows, config, downloads, hotkeys, languages, lens_files, lens_follow, lens_shortcuts,
-               lens_translate, translate)
+from . import (app_windows, config, downloads, hotkeys, languages, lens_capture, lens_files, lens_follow,
+               lens_shortcuts, lens_translate, translate)
 from .lens_busy import Activity, BusyIndicator
 from .lens_app import LENS_NAME, ctrl_held
 from .lens_menu import LensMenuMixin
 from .lens_overlay import LensOverlay
-from .lens_picker import RegionPicker
+from .lens_picker import CAPTURE_HINT, RegionPicker
 from .lens_scanner import LensScanner
 from .languages import QUICK_TARGETS
 
 log = logging.getLogger(__name__)
 
 MOUSE_INTERVAL_MS = 250  # the lens looks more often: it is small, and the pointer has just stopped
+CAPTURE_SETTLE_MS = 150  # after the picker's shades close: Windows takes them off the screen before the photo
+WDA_NONE = 0x00
+WDA_EXCLUDEFROMCAPTURE = 0x11
+
+
+def _keep_out_of_photos(widgets, out):
+    """Windows leaves these windows out of screen photos (`out`), or shows them in photos again. GDI photos
+    see it at once."""
+    if sys.platform != "win32":
+        return
+    for widget in widgets:
+        try:
+            ctypes.windll.user32.SetWindowDisplayAffinity(int(widget.winId()),
+                                                          WDA_EXCLUDEFROMCAPTURE if out else WDA_NONE)
+        except Exception:
+            log.debug("Could not change the screenshot affinity of %r", widget, exc_info=True)
 
 
 class MissingKey(RuntimeError):
@@ -66,6 +84,8 @@ class LensApp(LensMenuMixin):
         self._next_window_search = 0.0
         self._anchor = None          # where the pointer was when the lens was last placed
         self.file_windows = []
+        self.capture_windows = []    # "Capture part of the screen": one window for each picture
+        self._capturing = False      # from the picker's start until the photo is taken: the scanner waits
         self.movie_window = None     # "Movie to subtitles": one window, kept
         self.text_window = None
         self._save_text_window = QTimer()
@@ -78,7 +98,7 @@ class LensApp(LensMenuMixin):
         self.scanner = LensScanner(cfg["interval_ms"])
         self.scanner.covered = self.overlay.covered
         self.scanner.peeking = self.overlay.set_peeking
-        self.scanner.paused = lambda: ctrl_held() or self.overlay.engaged() or self._window_away()
+        self.scanner.paused = lambda: self._capturing or ctrl_held() or self.overlay.engaged() or self._window_away()
         self.scanner.blocked = self._under_own_windows
         self.scanner.peek_every = cfg["peek_seconds"]
         self.scanner.result.connect(self._show)
@@ -121,6 +141,7 @@ class LensApp(LensMenuMixin):
         return {
             "toggle": self.toggle,
             "area": self.choose_area,
+            "snip": self.capture_screen,
             "file": self.open_file,
             "movie": self.open_movie,
             "mouse_mode": lambda: self.act_mouse.toggle(),
@@ -391,7 +412,7 @@ class LensApp(LensMenuMixin):
         return screen, whole
 
     def choose_area(self):
-        if self.picker is not None:
+        if self.picker is not None or self._capturing:
             return
         self.overlay.clear()
         self.overlay.hide()
@@ -422,6 +443,71 @@ class LensApp(LensMenuMixin):
         self._sync_mouse_item()
         self.start()
         self._notify(f"Translating {self._where()} into {languages.name(self.target)}")
+
+    # ---- capture part of the screen ------------------------------------------------
+    def capture_screen(self):
+        """Drag a rectangle: its picture opens in a window of its own, with its text, original or translated.
+
+        The screen translation is not disturbed: it waits while the rectangle is dragged and goes on after."""
+        if self.picker is not None or self._capturing:
+            return  # one picker at a time (choosing an area uses it too)
+        self._capturing = True
+        self.picker = RegionPicker(self._capture_chosen, CAPTURE_HINT)
+        self.picker.start()
+
+    def _capture_chosen(self, result):
+        self.picker = None
+        if result is None:
+            self._capturing = False
+            self._notify("Capture canceled")
+            return
+        screen, rect = result
+        # The shades are closed; Windows takes them off the screen before the photo, not in it.
+        QTimer.singleShot(CAPTURE_SETTLE_MS, lambda: self._take_capture(screen, rect))
+
+    def _take_capture(self, screen, rect):
+        try:
+            image = self._photo_without_lens(screen, rect)
+        except Exception:
+            log.exception("Could not capture the screen")
+            image = None
+        finally:
+            self._capturing = False
+        if image is None or image.isNull():
+            self._notify("Could not capture the screen")
+            return None
+        window = self.open_capture(image)
+        self._notify(f"Captured {rect.width()} × {rect.height()} — reading the text…")
+        return window
+
+    def _photo_without_lens(self, screen, rect):
+        """`rect` of `screen` as it is under Lens: its translations, the lens frame and its own windows are
+        left out (the note in the corner always is)."""
+        own = [w for w in (self.text_window, self.main_window) if w is not None and w.isVisible()]
+        self.overlay.set_peeking(True)
+        _keep_out_of_photos(own, True)
+        try:
+            image = lens_capture.gdi(screen, rect)
+        finally:
+            _keep_out_of_photos(own, False)
+            self.overlay.set_peeking(False)
+        if image is not None and not image.isNull():
+            image.setDevicePixelRatio(screen.devicePixelRatio())
+        return image
+
+    def open_capture(self, image):
+        """A window with the picture `image` (a QImage in the screen's own pixels) and its text."""
+        from .lens_capture_window import CaptureWindow
+
+        window = CaptureWindow(image, self)
+        self.capture_windows.append(window)
+
+        def closed(*_):
+            if window in self.capture_windows:
+                self.capture_windows.remove(window)
+        window.destroyed.connect(closed)
+        window.show()
+        return window
 
     # ---- one window ----------------------------------------------------------------
     def use_window(self, window):
@@ -502,7 +588,7 @@ class LensApp(LensMenuMixin):
 
     def _follow_mouse(self):
         """Move the lens with the pointer; the translation comes back once the pointer rests."""
-        if self.picker is not None or ctrl_held() or self.overlay.engaged():
+        if self.picker is not None or self._capturing or ctrl_held() or self.overlay.engaged():
             return  # selecting or copying: the lens stays where it is
         pointer = QCursor.pos()
         if not lens_follow.should_move(self._anchor, pointer, self.cfg["lens_size"]):
@@ -822,7 +908,7 @@ class LensApp(LensMenuMixin):
             self._set(text_window_settings=self.text_window.settings())
             self.text_window.closed.disconnect()
             self.text_window.close()
-        for window in list(self.file_windows):
+        for window in list(self.file_windows) + list(self.capture_windows):
             window.close()
         if self.movie_window is not None:
             self.movie_window.shutdown()

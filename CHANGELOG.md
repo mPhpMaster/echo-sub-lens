@@ -3,6 +3,11 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] — 2026-10-12
+
+### Added
+- **Capture part of the screen** (`Ctrl+Alt+S`, the menu, or the Lens window): drag a rectangle and the picture opens in a window of its own, with the text Lens read in it. Switch between *Original* and *Translated* (the picture with the translations drawn over it, and the translated text), choose the language and the translator, select and copy any part of the text, copy or save the picture — or cancel. Lens's own translations are never in the capture.
+
 ## [1.7.0] — 2026-10-12
 
 ### Added

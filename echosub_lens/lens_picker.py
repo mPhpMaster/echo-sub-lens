@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication, QPainter, QPe
 from PySide6.QtWidgets import QWidget
 
 HINT = "Drag over the area to translate  ·  Esc to cancel"
+CAPTURE_HINT = "Drag over the part of the screen to capture  ·  Esc to cancel"
 MIN_SIZE = 24
 
 
@@ -43,7 +44,7 @@ class _ScreenShade(QWidget):
         font.setPixelSize(20)
         p.setFont(font)
         p.setPen(QColor("white"))
-        p.drawText(self.rect().adjusted(0, 40, 0, 0), Qt.AlignHCenter | Qt.AlignTop, HINT)
+        p.drawText(self.rect().adjusted(0, 40, 0, 0), Qt.AlignHCenter | Qt.AlignTop, self.picker.hint)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.RightButton:
@@ -73,10 +74,12 @@ class _ScreenShade(QWidget):
 
 
 class RegionPicker:
-    """`RegionPicker(on_done).start()`; on_done receives (QScreen, QRect relative to it) or None."""
+    """`RegionPicker(on_done).start()`; on_done receives (QScreen, QRect relative to it) or None.
+    `hint`: the line shown at the top of every screen."""
 
-    def __init__(self, on_done):
+    def __init__(self, on_done, hint=HINT):
         self.on_done = on_done
+        self.hint = hint
         self.shades = []
 
     def start(self):

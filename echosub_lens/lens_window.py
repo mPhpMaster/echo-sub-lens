@@ -322,6 +322,13 @@ class LensWindow(QWidget):
         self._help(layout, "How often Lens looks at the page under its translations, for text that changed. "
                            "Less often is lighter on the PC.")
 
+        self._section(layout, "Capture")
+        self.capture_button = QPushButton("Capture part of the screen…")
+        self.capture_button.clicked.connect(self._capture)
+        layout.addWidget(self._row(self.capture_button))
+        self._help(layout, "Drag a rectangle: the picture opens in a window with its text, original or translated "
+                           "— copy the text or save the picture.")
+
         self._section(layout, "Files")
         self.file_button = QPushButton("Translate a file…")
         self.file_button.clicked.connect(lambda: self.lens.open_file())
@@ -515,6 +522,11 @@ class LensWindow(QWidget):
         apply(*args)
         self.lens.refresh_menu()
         self.refresh()
+
+    def _capture(self):
+        """This window steps aside (minimized), so the screen under it can be captured."""
+        self.showMinimized()
+        self.lens.capture_screen()
 
     def _mode_chosen(self, index):
         if index == 0:

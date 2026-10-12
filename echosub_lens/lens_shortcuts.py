@@ -12,6 +12,7 @@ from . import hotkeys
 ACTIONS = {
     "toggle": ("Start or stop translating", "Ctrl+Alt+T"),
     "area": ("Choose an area of the screen", "Ctrl+Alt+R"),
+    "snip": ("Capture part of the screen", "Ctrl+Alt+S"),
     "file": ("Translate a file (image, PDF, Word…)", "Ctrl+Alt+F"),
     "movie": ("Translate a movie (subtitles to .srt)", ""),
     "mouse_mode": ("Lens around the mouse on / off", "Ctrl+Alt+M"),

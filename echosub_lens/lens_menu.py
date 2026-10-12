@@ -92,6 +92,7 @@ class LensMenuMixin:
         m.setDefaultAction(opener)  # shown in bold: what a click on the icon does
         self.act_running = self._item(m, "Translating", "toggle", self.toggle, checkable=True,
                                       checked=self.scanner.running)
+        self._item(m, "Capture part of the screen…", "snip")
         m.addSeparator()
 
         what = m.addMenu("What to translate")

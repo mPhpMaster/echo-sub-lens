@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Mohammad Al-Safadi
-"""Takes the README's pictures of the Lens window, the translation window and a note on the screen.
+"""Takes the README's pictures of the Lens window, the translation window, the capture window and a note on the
+screen.
 
     .venv\\Scripts\\python.exe scripts\\screenshots.py
 
@@ -36,6 +37,78 @@ def settle(app, ms=400):
 def block(text, translation, y):
     return Block([Line([(word, Box(10 + 60 * i, y, 55, 20)) for i, word in enumerate(text.split())])],
                  translation=lens_scanner.keep_dash(text, translation))
+
+
+SAMPLE_CAPTURE = [("Settings saved.", "تم حفظ الإعدادات."),
+                  ("Your changes will apply after a restart.", "ستُطبَّق تغييراتك بعد إعادة التشغيل."),
+                  ("Restart now?", "إعادة التشغيل الآن؟")]
+
+
+class SampleTranslator:
+    """Translates the sample picture's lines from a list: no network, no model."""
+    key = "sample"
+
+    def translate_many(self, texts, target, progress=None):
+        known = {" ".join(en.lower().split()): ar for en, ar in SAMPLE_CAPTURE}
+        out = []
+        for text in texts:
+            joined = " ".join(text.lower().split())
+            out.append(known.get(joined) or "\n".join(known.get(" ".join(line.lower().split()), line)
+                                                      for line in text.splitlines()))
+        return out
+
+    def cached(self, text, target):
+        return None
+
+    def release(self):
+        return False
+
+
+def sample_capture():
+    """A part of a screen with English text on it, as Lens would capture it."""
+    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtGui import QFont, QImage
+
+    image = QImage(640, 220, QImage.Format_ARGB32)
+    image.fill(QColor("#F8FAFC"))
+    p = QPainter(image)
+    p.setRenderHint(QPainter.TextAntialiasing)
+    p.fillRect(QRect(0, 0, 640, 44), QColor("#1E3A5F"))
+    font = QFont("Segoe UI")
+    font.setPixelSize(20)
+    p.setFont(font)
+    p.setPen(QColor("white"))
+    p.drawText(QRect(20, 0, 600, 44), Qt.AlignVCenter, SAMPLE_CAPTURE[0][0])
+    font.setPixelSize(24)
+    p.setFont(font)
+    p.setPen(QColor("#0F172A"))
+    p.drawText(QRect(20, 70, 600, 40), Qt.AlignVCenter, SAMPLE_CAPTURE[1][0])
+    p.drawText(QRect(20, 130, 600, 40), Qt.AlignVCenter, SAMPLE_CAPTURE[2][0])
+    p.end()
+    return image
+
+
+def capture_window(app, lens):
+    """"Capture part of the screen": its window, on a sample picture, read and translated."""
+    try:
+        from echosub_lens.lens_capture_window import CaptureWindow
+    except ImportError:
+        print("No capture window yet: capture-window.png not made")
+        return
+    from PySide6.QtCore import QElapsedTimer
+
+    with mock.patch.object(lens, "translator_for", return_value=SampleTranslator()), \
+            mock.patch.object(lens, "release_translator", lambda translator: None):
+        window = CaptureWindow(sample_capture(), lens)
+        window.show()
+        timer = QElapsedTimer()
+        timer.start()
+        while not getattr(window, "finished", True) and timer.elapsed() < 20000:
+            app.processEvents()
+        settle(app)
+        window.grab().save(os.path.join(OUT, "capture-window.png"))
+        window.close()
+        settle(app, 100)
 
 
 def main():
@@ -95,6 +168,8 @@ def main():
         picture.save(os.path.join(OUT, "translation-window-transparent.png"))
         lens.text_window.transparent.setChecked(False)
         lens.show_text_window(False)
+
+        capture_window(app, lens)
 
         lens.busy.set("screen", "Translating… 2 of 3", 66)
         settle(app)

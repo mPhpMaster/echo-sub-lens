@@ -4,7 +4,7 @@
 
 APP_NAME = "EchoSub Lens"
 APP_ID = "EchoSubLens"
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 DESCRIPTION = ("Translates the text on your screen, in place — an area, a whole screen or a lens around the mouse — "
                "and pictures, PDF and Word files too.")
