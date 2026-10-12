@@ -369,13 +369,14 @@ class LensScanner(QObject):
 
     # ---- the worker thread: read and translate -----------------------------
     def _work(self):
-        reader, reader_language = None, None
+        reader, reader_key = None, None
         typing = TypingWatch()
         while True:
             generation, image, target, language, translator, trim_edges, blocked = self._jobs.get()
             try:
-                if reader is None or language != reader_language:
-                    reader, reader_language = lens_ocr.Reader(language), language
+                if reader is None or (language, target) != reader_key:
+                    # The language translated into is not read: what is in it stays as it is anyway
+                    reader, reader_key = lens_ocr.Reader(language, skip=(target,)), (language, target)
                 started = time.monotonic()
                 blocks = self.process(reader, translator, image, target, trim_edges, self.progress.emit, blocked,
                                       typing)

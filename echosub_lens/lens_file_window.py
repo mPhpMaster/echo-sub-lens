@@ -233,7 +233,7 @@ class FileWindow(QWidget):
             self.signals.failed.emit(run, str(e) or e.__class__.__name__)
 
     def _work_pages(self, run, cancel, translator, target, ocr_language):
-        reader = lens_ocr.Reader(ocr_language)
+        reader = lens_ocr.Reader(ocr_language, skip=(target,))
         total = lens_files.page_count(self.path)
         for index, image in enumerate(lens_files.pages(self.path)):
             if cancel.is_set():

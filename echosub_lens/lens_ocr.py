@@ -7,6 +7,7 @@ Windows 10 and 11 recognize text offline for every language whose OCR pack is in
 """
 import asyncio
 import logging
+import unicodedata
 from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
@@ -39,7 +40,8 @@ class Box:
 @dataclass
 class Line:
     """One line of text, as Windows read it: its words and where they are (image pixels)."""
-    words: list           # [(text, Box)]
+    words: list           # [(text, Box)], left to right on the screen
+    rtl_reader: bool = False  # read by a right-to-left recognizer (Arabic, Hebrew)
 
     @property
     def box(self):
@@ -50,7 +52,108 @@ class Line:
 
     @property
     def text(self):
-        return " ".join(word for word, _ in self.words)
+        return logical_text([word for word, _ in sorted(self.words, key=lambda w: w[1].x)], self.rtl_reader)
+
+
+# ---- the order of the words, for right-to-left writing ---------------------------
+_LEADING_MARKS = ":;,.!?"
+
+
+def _right_to_left(word):
+    return any(unicodedata.bidirectional(ch) in ("R", "AL") for ch in word)
+
+
+def _left_to_right(word):
+    return any(unicodedata.bidirectional(ch) in ("L", "EN", "AN") for ch in word)
+
+
+def logical_text(words, rtl_reader=False):
+    """`words` as Windows found them, left to right on the screen, in the order they are read. Windows hands an
+    Arabic line over left to right — "الإغلاق قبل الملف احفظ" for "احفظ الملف قبل الإغلاق" — so its runs of
+    right-to-left words are turned around, and so is the line itself when most of it is right to left. An Arabic
+    recognizer also puts the colon of an English word in front of it (":Translated"): put back."""
+    if rtl_reader:
+        words = [w[1:] + w[0] if len(w) > 1 and w[0] in _LEADING_MARKS and not _right_to_left(w)
+                 and w[-1] not in _LEADING_MARKS else w for w in words]
+    if not any(_right_to_left(w) for w in words):
+        return " ".join(words)
+    runs = []  # [(right_to_left, [words])]: a word with no letters of its own stays with the run before it
+    for word in words:
+        rtl = _right_to_left(word) or (not _left_to_right(word) and bool(runs) and runs[-1][0])
+        if runs and runs[-1][0] == rtl:
+            runs[-1][1].append(word)
+        else:
+            runs.append((rtl, [word]))
+    runs = [(rtl, list(reversed(group)) if rtl else group) for rtl, group in runs]
+    rtl_words = sum(len(group) for rtl, group in runs if rtl)
+    if rtl_words * 2 >= len(words):  # mostly right to left: the line starts at the right
+        runs.reverse()
+    return " ".join(word for _, group in runs for word in group)
+
+
+# ---- which recognizer read a line best ------------------------------------------
+_EDGE = "\"'“”‘’()[]{}<>«»,.:;!?¿¡-–—…/|*•·"
+_INSIDE_OK = "'’-–.&/"
+
+
+def word_quality(word):
+    """1 for a word that looks like a word, 0 for what a recognizer makes of a script it does not know
+    ("öJPJl", "e..o", "TransIated", "0riginaI"); None for punctuation alone."""
+    core = word.strip(_EDGE)
+    if not core:
+        return None
+    if all(ch.isdigit() or ch in ".,:/-%" for ch in core):
+        return 1  # a number, a time, a date
+    if any(not (ch.isalpha() or ch in _INSIDE_OK or unicodedata.category(ch).startswith("M")) for ch in core):
+        return 0  # a digit or a symbol inside a word
+    if any(ch in _INSIDE_OK and core[i - 1] in _INSIDE_OK for i, ch in enumerate(core) if i):
+        return 0  # "e..o"
+    scripts = {_script_of(ch) for ch in core if ch.isalpha()}
+    if len(scripts) > 1:
+        return 0  # Latin and Cyrillic letters in one word
+    if scripts == {"latin"} and any(ch.isupper() and core[i - 1].islower() for i, ch in enumerate(core) if i):
+        return 0  # "TransIated"
+    return 1
+
+
+def _script_of(ch):
+    name = unicodedata.name(ch, "")
+    for script in ("LATIN", "ARABIC", "CYRILLIC", "HEBREW", "GREEK", "CJK", "HIRAGANA", "KATAKANA", "HANGUL",
+                   "THAI", "DEVANAGARI"):
+        if name.startswith(script):
+            return script.lower()
+    return name.split(" ")[0].lower()
+
+
+def line_quality(line):
+    scores = [q for q in (word_quality(word) for word, _ in line.words) if q is not None]
+    return sum(scores) / len(scores) if scores else 0.5
+
+
+def _overlap(a, b):
+    """Two readings of the same line: on the same height, and side by side."""
+    tall = min(a.h, b.h)
+    vertical = min(a.bottom, b.bottom) - max(a.y, b.y)
+    across = min(a.right, b.right) - max(a.x, b.x)
+    return tall > 0 and vertical > 0.5 * tall and across > 0
+
+
+def best_lines(readings):
+    """For every line on the picture, the reading that looks most like words; `readings` holds one list of
+    lines per recognizer, the main one (the Windows display language) first, which wins a tie."""
+    candidates = []
+    for order, lines in enumerate(readings):
+        for line in lines:
+            letters = sum(ch.isalnum() for word, _ in line.words for ch in word)
+            candidates.append((round(line_quality(line), 1), letters, -order, line))
+    candidates.sort(key=lambda c: c[:3], reverse=True)
+    chosen = []
+    for quality, letters, order, line in candidates:
+        if order != 0 and (quality < 0.8 or letters < 2.5 * len(line.words)):
+            continue  # a line only another alphabet's recognizer saw: kept only when it clearly reads as words
+        if not any(_overlap(line.box, other.box) for other in chosen):
+            chosen.append(line)
+    return sorted(chosen, key=lambda line: (line.box.y, line.box.x))
 
 
 @dataclass
@@ -156,19 +259,35 @@ def worth_translating(text):
 class Reader:
     """Reads a QImage. One per worker thread; `language` is a tag from available_languages() or AUTO."""
 
-    def __init__(self, language=AUTO):
+    def __init__(self, language=AUTO, skip=()):
+        """`skip`: language codes ("ar") whose alphabet need not be read by an extra recognizer: text already in
+        the language translated into is left as it is (and Windows' Arabic recognizer is slow)."""
         from winrt.windows.globalization import Language
         from winrt.windows.media.ocr import OcrEngine
 
         engine = None
         if language != AUTO:
             engine = OcrEngine.try_create_from_language(Language(language))
+        automatic = engine is None
         if engine is None:
             engine = OcrEngine.try_create_from_user_profile_languages()
         if engine is None:
             raise RuntimeError("Windows has no text recognition (OCR) language installed")
         self._engine = engine
         self.language = str(engine.recognizer_language.language_tag)
+        # Automatic: every installed language with another alphabet reads too, and each line keeps the reading
+        # that looks most like words — an English recognizer turns Arabic into "öJPJl" or misses it altogether
+        self._engines = [engine]
+        if automatic:
+            alphabets = {tag_script(self.language)} | {tag_script(code) for code in skip if code}
+            for lang in OcrEngine.available_recognizer_languages:
+                tag = str(lang.language_tag)
+                if tag_script(tag) not in alphabets:
+                    other = OcrEngine.try_create_from_language(lang)
+                    if other is not None:
+                        self._engines.append(other)
+                        alphabets.add(tag_script(tag))
+        self.languages = [str(e.recognizer_language.language_tag) for e in self._engines]
         self.max_dimension = int(OcrEngine.max_image_dimension)
         self._loop = asyncio.new_event_loop()
 
@@ -197,16 +316,37 @@ class Reader:
         writer.write_bytes(bytes(image.constBits())[: width * height * 4])
         bitmap = SoftwareBitmap.create_copy_from_buffer(writer.detach_buffer(), BitmapPixelFormat.BGRA8,
                                                         width, height)
-        result = self._loop.run_until_complete(self._recognize(bitmap))
-        lines = []
-        for line in result.lines:
-            words = []
-            for word in line.words:
-                r = word.bounding_rect
-                words.append((str(word.text), Box(r.x / scale, r.y / scale, r.width / scale, r.height / scale)))
-            if words:
-                lines.append(Line(words))
-        return lines
+        readings = []
+        for engine in self._engines:
+            result = self._loop.run_until_complete(self._recognize(engine, bitmap))
+            rtl = tag_script(str(engine.recognizer_language.language_tag)) in RTL_SCRIPTS
+            lines = []
+            for line in result.lines:
+                words = []
+                for word in line.words:
+                    r = word.bounding_rect
+                    words.append((str(word.text), Box(r.x / scale, r.y / scale, r.width / scale, r.height / scale)))
+                if words:
+                    lines.append(Line(words, rtl))
+            readings.append(lines)
+        return readings[0] if len(readings) == 1 else best_lines(readings)
 
-    async def _recognize(self, bitmap):
-        return await self._engine.recognize_async(bitmap)
+    @staticmethod
+    async def _recognize(engine, bitmap):
+        return await engine.recognize_async(bitmap)
+
+
+RTL_SCRIPTS = {"arabic", "hebrew"}
+_TAG_SCRIPTS = {
+    "ar": "arabic", "fa": "arabic", "ur": "arabic", "ps": "arabic", "he": "hebrew", "yi": "hebrew",
+    "ru": "cyrillic", "uk": "cyrillic", "bg": "cyrillic", "be": "cyrillic", "kk": "cyrillic", "mk": "cyrillic",
+    "sr": "cyrillic", "el": "greek", "zh": "han", "ja": "japanese", "ko": "hangul", "th": "thai",
+    "hi": "devanagari",
+}
+
+
+def tag_script(tag):
+    """The alphabet of an OCR language tag ("ar-SA" -> "arabic", "en-US" -> "latin"; "sr-Latn" -> "latin")."""
+    if "latn" in tag.lower():
+        return "latin"
+    return _TAG_SCRIPTS.get(tag.split("-")[0].lower(), "latin")

@@ -3,6 +3,12 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.8.1] — 2026-10-12
+
+### Fixed
+- **Arabic text is read now.** With *Automatic*, Lens read only with the recognizer of the Windows display language (English here), which turns Arabic into "öJPJl" or misses it. Now every installed recognizer with another alphabet (Arabic, Russian…) reads too, and each line keeps the reading that looks most like words. Arabic words come in the right order (Windows hands them over left to right), and the colon an Arabic recognizer puts in front of an English word goes back.
+- Translating the screen does not read the alphabet of the language translated into (that text is left as it is), so translating into Arabic stays as fast as before; Windows' Arabic recognizer is slow on a whole screen.
+
 ## [1.8.0] — 2026-10-12
 
 ### Added

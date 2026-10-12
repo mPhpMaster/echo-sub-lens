@@ -28,8 +28,12 @@ RLM = "\u200f"
 
 
 def line(text, x, y, h=24):
+    """As Windows reads it: words left to right on the screen (an Arabic line's last word first)."""
     words, left = [], x
-    for word in text.split():
+    order = text.split()
+    if any("؀" <= ch <= "ۿ" for ch in text):
+        order.reverse()
+    for word in order:
         words.append((word, Box(left, y, 14 * len(word), h)))
         left += 14 * len(word) + 8
     return Line(words)
