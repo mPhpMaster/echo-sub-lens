@@ -3,8 +3,8 @@
 """EchoSub Lens: the capture window — a part of the screen, kept as a picture, with its text.
 
 The picture is read at once (Windows OCR) and translated with the language and the translator chosen at the
-top. The user switches between the original and the translated picture, selects and copies the text, copies
-or saves the picture, or closes the window.
+top. Under the picture, the text read and its translation stand side by side; the user selects and copies
+either, copies or saves the picture, searches Google for the picture or the text, or closes the window.
 """
 import logging
 import os
@@ -16,10 +16,10 @@ from urllib.parse import quote_plus
 
 from PySide6.QtCore import QBuffer, QIODevice, QMimeData, QObject, QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMenu, QPlainTextEdit,
-                               QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
-from . import languages, lens_files, lens_ocr, lens_style, lens_translate
+from . import google_lens, languages, lens_files, lens_ocr, lens_style, lens_translate
 from .lens_about import ACCENT
 from .lens_file_window import TRANSLATOR_HINTS
 from .lens_menu import fill_translator_combo
@@ -29,12 +29,14 @@ from .lens_window import STYLE
 
 log = logging.getLogger(__name__)
 
-ORIGINAL, TRANSLATED = "original", "translated"
 TITLE = "Capture — EchoSub Lens"
 NO_TEXT = "No text was found in this picture"
+READING = "Reading the text…"
+TRANSLATING = "Translating…"
 MAX_SCREEN_SHARE = 0.8      # the window is never larger than this part of the screen
-TEXT_HEIGHT = 150           # the text box under the picture
+TEXT_HEIGHT = 170           # the two text boxes under the picture (with their headings)
 MIN_SCALE = 0.5             # a picture is never shown smaller than this: it scrolls instead
+NARROW = 560                # a window narrower than this shows the two text boxes one above the other
 
 CAPTURE_STYLE = STYLE + f"""
 QWidget#capture_window {{ background: #111615; }}
@@ -42,11 +44,11 @@ QPlainTextEdit {{ background: #151B1A; border: 1px solid #24302E; border-radius:
                   selection-background-color: #16302C; font-size: 12pt; }}
 QScrollArea#picture {{ background: #0B0F0E; border: 1px solid #24302E; border-radius: 8px; }}
 QLabel#status {{ color: #9CA3AF; }}
-QPushButton#segment {{ border-radius: 0; padding: 6px 16px; }}
-QPushButton#segment:checked {{ background: #16302C; border-color: {ACCENT}; color: white; font-weight: 600; }}
+QLabel#heading {{ color: #9CA3AF; font-weight: 600; padding-left: 2px; }}
 QPushButton#primary {{ background: {ACCENT}; color: #04211D; border: none; font-weight: 700; }}
 QPushButton#primary:hover {{ background: #2DD4BF; }}
 QSplitter::handle {{ background: transparent; }}
+QPushButton#search::menu-indicator {{ image: none; width: 0; }}
 """
 
 
@@ -91,7 +93,7 @@ def translated(block):
 
 
 def shown_text(blocks):
-    """The text box: each line of the picture on a line of its own (`blocks` holds the lines of each block);
+    """A text box: each line of the picture on a line of its own (`blocks` holds the lines of each block);
     a block of several lines (a paragraph) stands apart from the rest with an empty line."""
     out = []
     for lines in blocks:
@@ -102,10 +104,6 @@ def shown_text(blocks):
 
 
 GOOGLE_SEARCH = "https://www.google.com/search?q="
-GOOGLE_LENS = "https://lens.google.com/"
-LENS_UPLOAD = "https://lens.google.com/v3/upload"
-BROWSER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                 "Chrome/129.0.0.0 Safari/537.36")
 MAX_QUERY = 1500  # characters of text in a Google search (a longer address is refused)
 
 
@@ -122,30 +120,12 @@ def png_bytes(image):
     return bytes(buffer.data())
 
 
-def lens_search_url(png, session=None):
-    """Sends the picture to Google Lens, as its own page does, and returns the address of the results.
-    Raises when Google does not answer with one."""
-    import requests
-
-    session = session or requests.Session()
-    response = session.post(LENS_UPLOAD, params={"hl": "en", "re": "df", "st": str(int(time.time() * 1000)),
-                                                 "ep": "gsbubb"},
-                            files={"encoded_image": ("capture.png", png, "image/png")},
-                            headers={"User-Agent": BROWSER_AGENT}, allow_redirects=False, timeout=30)
-    url = response.headers.get("Location", "")
-    if response.status_code not in (301, 302, 303, 307) or not url.startswith("https://"):
-        raise RuntimeError(f"Google Lens answered {response.status_code}")
-    return url
-
-
 class _Signals(QObject):
     # Each signal starts with its run: what an older run (another language, another translator) sends is dropped.
     read = Signal(int, object)         # run, the lines read in the picture
     translated = Signal(int, object)   # run, the blocks with their translations
     progress = Signal(int, str)
     failed = Signal(int, str)
-    lens_found = Signal(str)           # the address of Google Lens's results for the picture
-    lens_failed = Signal(str)
 
 
 class TextBox(QPlainTextEdit):
@@ -158,8 +138,25 @@ class TextBox(QPlainTextEdit):
 
     def createMimeDataFromSelection(self):
         data = QMimeData()
-        data.setText(plain(self.textCursor().selectedText().replace("\u2029", "\n")))
+        data.setText(plain(self.selected_text()))
         return data
+
+    def selected_text(self):
+        return self.textCursor().selectedText().replace(" ", "\n")
+
+    def show_text(self, text, rtl, placeholder):
+        """Shows `text` (right to left, aligned right, when `rtl`); the selection stays when nothing changed."""
+        if not rtl:
+            text = "\n".join(line.lstrip("‏") for line in text.split("\n"))
+        direction = Qt.RightToLeft if rtl else Qt.LeftToRight
+        self.setLayoutDirection(direction)
+        option = self.document().defaultTextOption()
+        option.setTextDirection(direction)
+        option.setAlignment(Qt.AlignRight if rtl else Qt.AlignLeft)
+        self.document().setDefaultTextOption(option)
+        self.setPlaceholderText(placeholder)
+        if text != self.toPlainText():
+            self.setPlainText(text)
 
 
 class CaptureWindow(QWidget):
@@ -188,24 +185,20 @@ class CaptureWindow(QWidget):
         self.translator = lens.translator_for(self.translator_choice)
         self.lines = None          # what the reading found (None: not read yet)
         self.blocks = []           # in reading order; translations once translated
-        self.rendered = None       # the picture with the translations drawn over it
-        self.view = ORIGINAL
-        self._auto_view = True     # the first translation chooses the view, until the user chooses one
+        self.rendered = None       # the picture with the translations drawn over it (for Google Lens)
+        self.error = ""            # why the last run failed
         self.finished = False      # the last run is over (done, nothing found, or failed)
         self.run = 0
         self._cancel = threading.Event()
         self._released = False
-        self._lens_busy = False  # a picture on its way to Google Lens
-        self.signals = _Signals()
+        self.signals = _Signals(self)  # gone with the window, in the Qt thread (never freed by a worker)
         self.signals.read.connect(self._read_done)
         self.signals.translated.connect(self._translated)
         self.signals.progress.connect(self._progress)
         self.signals.failed.connect(self._failed)
-        self.signals.lens_found.connect(self._lens_found)
-        self.signals.lens_failed.connect(self._lens_failed)
         self._build()
         self._size_to_picture()
-        self._show_view()
+        self._show_picture()
         self._start()
 
     # ---- layout --------------------------------------------------------------
@@ -215,23 +208,6 @@ class CaptureWindow(QWidget):
         layout.setSpacing(10)
 
         top = QHBoxLayout()
-        self.original_button = QPushButton("Original")
-        self.translated_button = QPushButton("Translated")
-        self.view_group = QButtonGroup(self)
-        self.view_group.setExclusive(True)
-        for button, view, tip in ((self.original_button, ORIGINAL, "The picture and its text as they are"),
-                                  (self.translated_button, TRANSLATED, "The picture and its text translated")):
-            button.setObjectName("segment")
-            button.setCheckable(True)
-            button.setToolTip(tip)
-            button.clicked.connect(lambda _=False, v=view: self.set_view(v))
-            self.view_group.addButton(button)
-        segments = QHBoxLayout()
-        segments.setSpacing(0)
-        segments.addWidget(self.original_button)
-        segments.addWidget(self.translated_button)
-        top.addLayout(segments)
-        top.addSpacing(16)
         top.addWidget(QLabel("Translate into"))
         self.target_combo = QComboBox()
         self.target_combo.setMaxVisibleItems(20)
@@ -274,37 +250,53 @@ class CaptureWindow(QWidget):
         self.picture_label.setAlignment(Qt.AlignCenter)
         self.picture_label.setStyleSheet("background: transparent;")
         self.scroll.setWidget(self.picture_label)
-        self.text_box = TextBox()
-        self.text_box.setMinimumHeight(60)
         self.splitter.addWidget(self.scroll)
-        self.splitter.addWidget(self.text_box)
+
+        self.text_splitter = QSplitter(Qt.Horizontal)
+        self.text_splitter.setChildrenCollapsible(False)
+        self.original_heading, self.original_box = self._text_pane("Original")
+        self.translation_heading, self.translation_box = self._text_pane(self._translation_title())
+        self.original_box.setToolTip("All the text read in the picture, each line as in the picture")
+        self.translation_box.setToolTip("The text translated, line by line")
+        self.splitter.addWidget(self.text_splitter)
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
         layout.addWidget(self.splitter, 1)
 
         bottom = QHBoxLayout()
-        self.copy_text_button = QPushButton("Copy text")
-        self.copy_text_button.setToolTip("Copy all the text of this view (select a part to copy only that)")
-        self.copy_text_button.clicked.connect(self.copy_text)
+        self.copy_original_button = QPushButton("Copy original")
+        self.copy_original_button.setToolTip("Copy all the text read in the picture")
+        self.copy_original_button.clicked.connect(self.copy_original)
+        self.copy_translation_button = QPushButton("Copy translation")
+        self.copy_translation_button.setToolTip("Copy all the translated text")
+        self.copy_translation_button.clicked.connect(self.copy_translation)
         self.copy_picture_button = QPushButton("Copy picture")
-        self.copy_picture_button.setToolTip("Copy the picture of this view, to paste it anywhere")
+        self.copy_picture_button.setToolTip("Copy the captured picture, to paste it anywhere")
         self.copy_picture_button.clicked.connect(self.copy_picture)
         self.search_button = QPushButton("Search Google ▾")
-        self.search_button.setToolTip("Search Google for this picture (Google Lens) or for its text")
+        self.search_button.setObjectName("search")  # its own arrow: Qt's menu arrow is left out
+        self.search_button.setToolTip("Search Google for the picture (Google Lens) or for its text")
         self.search_menu = QMenu(self.search_button)
-        self.search_picture_action = self.search_menu.addAction("Search by the picture (Google Lens)",
+        self.search_picture_action = self.search_menu.addAction("Search the picture (Google Lens)",
                                                                 self.search_picture)
-        self.search_text_action = self.search_menu.addAction("Search for the text", self.search_text)
-        self.search_menu.aboutToShow.connect(self._search_menu_opening)
+        self.search_rendered_action = self.search_menu.addAction("Search the picture, translated (Google Lens)",
+                                                                 self.search_translated_picture)
+        self.search_menu.addSeparator()
+        self.search_original_action = self.search_menu.addAction("Search the original text",
+                                                                 self.search_original)
+        self.search_translation_action = self.search_menu.addAction("Search the translation",
+                                                                    self.search_translation)
+        self.search_menu.aboutToShow.connect(self._update_actions)
         self.search_button.setMenu(self.search_menu)
         self.save_button = QPushButton("Save picture…")
         self.save_button.setObjectName("primary")
-        self.save_button.setToolTip("Save the picture of this view as PNG or JPG")
+        self.save_button.setToolTip("Save the captured picture as PNG or JPG")
         self.save_button.clicked.connect(self.save)
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setToolTip("Close this window (Esc)")
         self.cancel_button.clicked.connect(self.close)
-        for widget in (self.copy_text_button, self.copy_picture_button, self.search_button):
+        for widget in (self.copy_original_button, self.copy_translation_button, self.copy_picture_button,
+                       self.search_button):
             bottom.addWidget(widget)
         bottom.addStretch(1)
         bottom.addWidget(self.save_button)
@@ -312,15 +304,33 @@ class CaptureWindow(QWidget):
         layout.addLayout(bottom)
         QShortcut(QKeySequence(Qt.Key_Escape), self, self.close)
 
+    def _text_pane(self, title):
+        """A small heading over a read-only text box, added to the text splitter."""
+        pane = QWidget()
+        column = QVBoxLayout(pane)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(4)
+        heading = QLabel(title)
+        heading.setObjectName("heading")
+        box = TextBox()
+        box.setMinimumHeight(60)
+        column.addWidget(heading)
+        column.addWidget(box, 1)
+        self.text_splitter.addWidget(pane)
+        return heading, box
+
+    def _translation_title(self):
+        return f"Translation ({languages.name(self.target)})"
+
     def _size_to_picture(self):
         """As large as the picture (plus the bars and the text), never more than 80 % of the screen."""
         screen = (self._screen() or QGuiApplication.primaryScreen()).availableGeometry()
         width = round(self.picture.width() / self.ratio)
         height = round(self.picture.height() / self.ratio)
         max_w, max_h = int(screen.width() * MAX_SCREEN_SHARE), int(screen.height() * MAX_SCREEN_SHARE)
-        chrome_h = 190 + TEXT_HEIGHT
+        chrome_h = 170 + TEXT_HEIGHT
         w = max(640, min(width + 40, max_w))
-        h = max(420, min(height + chrome_h, max_h))
+        h = max(440, min(height + chrome_h, max_h))
         self.resize(w, h)
         self.splitter.setSizes([max(h - chrome_h, 120), TEXT_HEIGHT])
         self.move(screen.x() + (screen.width() - w) // 2, screen.y() + (screen.height() - h) // 2)
@@ -382,73 +392,79 @@ class CaptureWindow(QWidget):
         self.run += 1
         self.rendered = None
         self.finished = False
+        self.error = ""
         for block in self.blocks:
             block.translation = ""
-        self.status.setText("Reading the text…" if self.lines is None else
-                            f"Translating into {languages.name(self.target)}…")
-        if self.view == TRANSLATED:
-            self._show_view()
+        self.status.setText(READING if self.lines is None else f"Translating into {languages.name(self.target)}…")
+        self._show_texts()
         lines = None if self.lines is None else list(self.lines)
-        threading.Thread(target=self._work, args=(self.run, self._cancel, self.translator, self.target,
-                                                  self.ocr_language, lines),
+        threading.Thread(target=self._work, args=(self.signals, self.picture, self.run, self._cancel,
+                                                  self.translator, self.target, self.ocr_language, lines),
                          name="lens-capture", daemon=True).start()
 
-    def _work(self, run, cancel, translator, target, ocr_language, lines):
-        """Worker thread: reads (once), then translates. Never touches a widget."""
+    @staticmethod
+    def _work(signals, picture, run, cancel, translator, target, ocr_language, lines):
+        """Worker thread: reads (once), then translates. Never touches a widget, nor holds the window (its
+        last reference must not be let go away from the Qt thread)."""
         stage = "read"
         try:
             if lines is None:
-                self.signals.progress.emit(run, "Reading the text…")
-                lines = read_lines(self.picture, ocr_language)
+                signals.progress.emit(run, READING)
+                lines = read_lines(picture, ocr_language)
                 if cancel.is_set():
                     return
-                self.signals.read.emit(run, lines)
+                signals.read.emit(run, lines)
             blocks = blocks_of(lines)
             todo = [b for b in blocks if needs_translation(b, target)]
             if todo:
                 stage = "translate"
-                self.signals.progress.emit(run, f"Translating into {languages.name(target)}…")
+                signals.progress.emit(run, f"Translating into {languages.name(target)}…")
 
                 def report(done, total):
                     if not cancel.is_set():
-                        self.signals.progress.emit(run, f"Translating… {done} of {total}")
+                        signals.progress.emit(run, f"Translating… {done} of {total}")
                 texts = translator.translate_many([b.text for b in todo], target, progress=report)
                 if cancel.is_set():
                     return
                 from .lens_scanner import colors_of, image_array, keep_dash
 
-                pixels = image_array(self.picture)
+                pixels = image_array(picture)
                 for block, text in zip(todo, texts):
                     block.translation = keep_dash(block.text, text) or ""
                     block.background, block.foreground = colors_of(pixels, block.box)
             if not cancel.is_set():
-                self.signals.translated.emit(run, blocks)
+                signals.translated.emit(run, blocks)
         except Exception as e:
             if cancel.is_set():
                 return  # replaced or closed: its troubles no longer matter
             log.exception("Could not %s the captured picture", stage)
             what = "read the text" if stage == "read" else "translate the text"
-            self.signals.failed.emit(run, f"Could not {what}: {str(e) or e.__class__.__name__}")
+            signals.failed.emit(run, f"Could not {what}: {str(e) or e.__class__.__name__}")
 
     # ---- results (Qt thread) ---------------------------------------------------
+    def _current(self, run):
+        """What `run` sends still matters: it is the last run, and the window is not closing."""
+        return run == self.run and not self._released
+
     def _progress(self, run, text):
-        if run == self.run:
+        if self._current(run):
             self.status.setText(text)
 
     def _read_done(self, run, lines):
-        if run != self.run:
+        if not self._current(run):
             return
         self.lines = lines
         self.blocks = blocks_of(lines)
         if not self.blocks:
             self.status.setText(NO_TEXT)
-        self._show_view()
+        self._show_texts()
 
     def _translated(self, run, blocks):
-        if run != self.run:
+        if not self._current(run):
             return
         self.blocks = blocks
         shown = [b for b in blocks if translated(b)]
+        # Not shown in the window: the translated picture is there for "Search the picture, translated".
         self.rendered = lens_files.render(self.picture, shown, self.target, self.style) if shown else None
         self.finished = True
         name = languages.name(self.target)
@@ -458,36 +474,27 @@ class CaptureWindow(QWidget):
             self.status.setText(f"The text is already in {name} — select it to copy it.")
         else:
             self.status.setText(f"Translated into {name} — select text to copy it, or save the picture.")
-        if self._auto_view:  # the first result chooses the view; after that it is the user's choice
-            self._auto_view = False
-            self.view = TRANSLATED if shown else ORIGINAL
-        self._show_view()
+        self._show_texts()
 
     def _failed(self, run, message):
-        if run != self.run:
+        if not self._current(run):
             return
         self.finished = True
+        self.error = message
         self.status.setText(message)
-        self.view = ORIGINAL
-        self._show_view()
+        self._show_texts()
 
     def restyle(self, style):
-        """The Lens look changed: draw the translations again."""
+        """The Lens look changed: the translated picture (for Google Lens) is drawn again."""
         self.style = style
         shown = [b for b in self.blocks if translated(b)]
         if self.rendered is not None and shown:
             self.rendered = lens_files.render(self.picture, shown, self.target, style)
-            self._show_view()
 
-    # ---- the two views ---------------------------------------------------------------
-    def set_view(self, view):
-        self._auto_view = False
-        self.view = TRANSLATED if view == TRANSLATED else ORIGINAL
-        self._show_view()
-
+    # ---- the picture and the two texts -----------------------------------------------
     def current_image(self):
-        """The picture of this view, in the screen's pixels (devicePixelRatio as captured)."""
-        image = QImage(self.rendered if self.view == TRANSLATED and self.rendered is not None else self.picture)
+        """The captured picture, in the screen's pixels (devicePixelRatio as captured)."""
+        image = QImage(self.picture)
         image.setDevicePixelRatio(self.ratio)
         return image
 
@@ -500,35 +507,27 @@ class CaptureWindow(QWidget):
         return shown_text([split_like(b.translation, len(b.lines)).split("\n") if translated(b)
                            else [line.text for line in b.lines] for b in self.blocks])
 
-    def current_text(self):
-        return self.translated_text() if self.view == TRANSLATED else self.original_text()
-
-    def _show_view(self):
-        self.original_button.setChecked(self.view == ORIGINAL)
-        self.translated_button.setChecked(self.view == TRANSLATED)
-        self._show_picture()
-        text = self.current_text()
-        if self.view == TRANSLATED:
-            rtl = self.target in languages.RTL
-            placeholder = "The translated text appears here." if self.blocks or self.lines is None else NO_TEXT
+    def _show_texts(self):
+        original = self.original_text()
+        if self.lines is None:
+            placeholder = self.error or READING
         else:
-            rtl = right_to_left(text)
-            placeholder = "Reading the text…" if self.lines is None else NO_TEXT
-        if not rtl:
-            text = "\n".join(line.lstrip("\u200f") for line in text.split("\n"))
-        direction = Qt.RightToLeft if rtl else Qt.LeftToRight
-        self.text_box.setLayoutDirection(direction)
-        option = self.text_box.document().defaultTextOption()
-        option.setTextDirection(direction)
-        option.setAlignment(Qt.AlignRight if rtl else Qt.AlignLeft)
-        self.text_box.document().setDefaultTextOption(option)
-        self.text_box.setPlaceholderText(placeholder)
-        if text != self.text_box.toPlainText():
-            self.text_box.setPlainText(text)
+            placeholder = NO_TEXT
+        self.original_box.show_text(original, right_to_left(original), placeholder)
+
+        self.translation_heading.setText(self._translation_title())
+        if not self.finished:
+            placeholder = READING if self.lines is None else TRANSLATING
+        elif self.error:
+            placeholder = self.error
+        else:
+            placeholder = NO_TEXT
+        self.translation_box.show_text(self.translated_text(), self.target in languages.RTL, placeholder)
+        self._update_actions()
 
     def _show_picture(self):
         """The picture fits the space, keeps its shape, and is drawn sharp in the window's own pixels."""
-        image = self.rendered if self.view == TRANSLATED and self.rendered is not None else self.picture
+        image = self.picture
         logical_w, logical_h = image.width() / self.ratio, image.height() / self.ratio
         viewport = self.scroll.viewport().size()
         avail_w, avail_h = max(viewport.width() - 8, 50), max(viewport.height() - 8, 50)
@@ -547,6 +546,7 @@ class CaptureWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.text_splitter.setOrientation(Qt.Vertical if self.width() < NARROW else Qt.Horizontal)
         self._show_picture()
 
     def showEvent(self, event):
@@ -554,74 +554,75 @@ class CaptureWindow(QWidget):
         self._show_picture()
 
     # ---- copying and saving ----------------------------------------------------------
-    def copy_text(self):
-        text = plain(self.current_text())
+    def _copy(self, text, what):
+        text = plain(text)
         QGuiApplication.clipboard().setText(text)
-        self.lens._notify("Text copied" if text else "There is no text to copy")
+        self.lens._notify(f"{what} copied" if text else "There is no text to copy")
+
+    def copy_original(self):
+        self._copy(self.original_text(), "Original text")
+
+    def copy_translation(self):
+        self._copy(self.translated_text(), "Translation")
 
     def copy_picture(self):
         QGuiApplication.clipboard().setImage(self.current_image())
         self.lens._notify("Picture copied")
 
     # ---- searching Google ----------------------------------------------------------
-    def _search_text(self):
-        """The text selected, or else all the text of this view."""
-        selected = self.text_box.textCursor().selectedText().replace("\u2029", "\n")
-        return plain(selected or self.current_text()).strip()
+    @staticmethod
+    def _search_words(box, text):
+        """The text selected in `box`, or else all of `text`."""
+        return plain(box.selected_text() or text).strip()
 
-    def _search_menu_opening(self):
-        text = self._search_text()
-        selected = self.text_box.textCursor().hasSelection()
-        self.search_text_action.setEnabled(bool(text))
-        self.search_text_action.setText("Search for the selected text" if selected and text else
-                                        "Search for the text" if text else "Search for the text (none read)")
+    def _update_actions(self):
+        """Each search can be made only when it has something to search for."""
+        self.search_rendered_action.setEnabled(self.rendered is not None)
+        self.search_original_action.setEnabled(bool(self._search_words(self.original_box, self.original_text())))
+        self.search_translation_action.setEnabled(
+            bool(self._search_words(self.translation_box, self.translated_text())))
 
-    def search_text(self):
-        text = self._search_text()
+    def _search_text(self, text, what):
         if not text:
             self.lens._notify("There is no text to search for")
             return
         QDesktopServices.openUrl(QUrl(text_search_url(text)))
-        self.lens._notify("Searching Google for the text, in your browser")
+        self.lens._notify(f"Searching Google for {what}, in your browser")
+
+    def search_original(self):
+        self._search_text(self._search_words(self.original_box, self.original_text()), "the original text")
+
+    def search_translation(self):
+        self._search_text(self._search_words(self.translation_box, self.translated_text()), "the translation")
 
     def search_picture(self):
-        """The picture of this view goes to Google Lens (only now, when asked); its results open in the browser."""
-        if self._lens_busy:
+        """The captured picture, as it is, goes to Google Lens (only now, when asked)."""
+        self._search_picture(self.picture)
+
+    def search_translated_picture(self):
+        """The picture with the translations drawn over it goes to Google Lens."""
+        if self.rendered is None:
+            self.lens._notify("There is no translated picture yet")
             return
-        self._lens_busy = True
-        self.search_button.setEnabled(False)
-        self.status.setText("Sending the picture to Google Lens…")
-        png = png_bytes(self.current_image())
+        self._search_picture(self.rendered)
 
-        def work():
-            try:
-                self.signals.lens_found.emit(lens_search_url(png))
-            except Exception as e:
-                log.warning("Google Lens search failed: %s", e)
-                self.signals.lens_failed.emit(str(e) or e.__class__.__name__)
-        threading.Thread(target=work, name="lens-google-lens", daemon=True).start()
-
-    def _lens_found(self, url):
-        self._lens_busy = False
-        self.search_button.setEnabled(True)
-        QDesktopServices.openUrl(QUrl(url))
-        self.status.setText("Google Lens's results are open in your browser.")
-        self.lens._notify("Google Lens opened in your browser")
-
-    def _lens_failed(self, message):
-        """No answer from Google: the picture goes on the clipboard and Google Lens opens, to paste it there."""
-        self._lens_busy = False
-        self.search_button.setEnabled(True)
-        QGuiApplication.clipboard().setImage(self.current_image())
-        QDesktopServices.openUrl(QUrl(GOOGLE_LENS))
-        self.status.setText(f"Could not send the picture ({message}). It is copied: paste it in Google Lens (Ctrl+V).")
-        self.lens._notify("Picture copied — paste it in Google Lens (Ctrl+V)")
+    def _search_picture(self, image):
+        try:
+            message = google_lens.search_picture(png_bytes(image))
+        except OSError as e:
+            log.warning("Google Lens search failed: %s", e)
+            copy = QImage(image)
+            copy.setDevicePixelRatio(self.ratio)
+            QGuiApplication.clipboard().setImage(copy)
+            self.status.setText(f"Could not open Google Lens: {str(e) or e.__class__.__name__}. The picture is "
+                                "copied: paste it in lens.google.com (Ctrl+V).")
+            self.lens._notify("Picture copied — paste it in Google Lens (Ctrl+V)")
+            return
+        self.status.setText(message)
+        self.lens._notify(message)
 
     def suggested_name(self):
-        stamp = time.strftime("%Y-%m-%d %H-%M-%S", self.taken)
-        if self.view == TRANSLATED and self.rendered is not None:
-            return f"Capture {stamp} ({languages.name(self.target)}).png"
-        return f"Capture {stamp}.png"
+        return f"Capture {time.strftime('%Y-%m-%d %H-%M-%S', self.taken)}.png"
 
     def save(self):
         folder = self.lens.cfg.get("last_folder") or QStandardPaths.writableLocation(

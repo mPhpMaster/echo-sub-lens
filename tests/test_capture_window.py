@@ -18,8 +18,19 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage, QTextCursor  # noqa: 
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+try:
+    from echosub_lens import google_lens  # noqa: E402, F401
+except ImportError:  # not written yet: the window only needs its search_picture(png), patched in the tests
+    import types
+
+    import echosub_lens
+
+    _fake = types.ModuleType("echosub_lens.google_lens")
+    _fake.search_picture = lambda png: "Google Lens is opening in your browser"
+    sys.modules["echosub_lens.google_lens"] = echosub_lens.google_lens = _fake
+
 from echosub_lens import lens_capture_window, lens_ocr, lens_style  # noqa: E402
-from echosub_lens.lens_capture_window import NO_TEXT, ORIGINAL, TRANSLATED, CaptureWindow  # noqa: E402
+from echosub_lens.lens_capture_window import NO_TEXT, TRANSLATING, CaptureWindow  # noqa: E402
 from echosub_lens.lens_ocr import Box, Line  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
@@ -163,32 +174,49 @@ class CaptureWindowTest(unittest.TestCase):
         self.assertEqual(FakeReader.closed, FakeReader.made)
         # Only the English text was sent; the Arabic text is already in the target language.
         self.assertEqual(lens.made[0].calls, [(["Save the file before closing", "Open the settings"], "ar")])
-        self.assertEqual(window.view, TRANSLATED)
-        self.assertTrue(window.translated_button.isChecked())
-        self.assertEqual(window.text_box.toPlainText().split("\n"),
+        self.assertFalse(hasattr(window, "original_button"))  # no views any more: two text boxes
+        self.assertEqual(window.translation_box.toPlainText().split("\n"),
                          ["[google:ar] Save the file before closing", "مرحبا بكم في البرنامج",
                           "[google:ar] Open the settings"])
-        self.assertEqual(window.text_box.layoutDirection(), Qt.RightToLeft)
+        self.assertEqual(window.translation_box.layoutDirection(), Qt.RightToLeft)
+        option = window.translation_box.document().defaultTextOption()
+        self.assertEqual(option.alignment(), Qt.AlignRight)
+        self.assertEqual(window.original_box.toPlainText().split("\n"),
+                         ["Save the file before closing", "مرحبا بكم في البرنامج", "Open the settings"])
+        self.assertEqual(window.original_box.layoutDirection(), Qt.LeftToRight)
+        self.assertEqual(window.original_heading.text(), "Original")
+        self.assertEqual(window.translation_heading.text(), "Translation (Arabic)")
         self.assertIsNotNone(window.rendered)
         self.assertIn("Arabic", window.status.text())
 
-    def test_view_switch_changes_picture_and_text(self):
-        window, _ = self.window()
+    def test_two_boxes_and_the_picture_stays_as_captured(self):
+        lens = FakeLens()
+        gate = threading.Event()
+        lens.gates["google"] = gate
+        window, _ = self.window(lens)
+        self.assertTrue(wait_for(lambda: window.lines is not None))
+        # read, not translated yet: the original is there, the translation box says it is working
+        self.assertEqual(window.original_box.toPlainText(), "Save the file before closing\nOpen the settings")
+        self.assertEqual(window.translation_box.toPlainText(), "")
+        self.assertEqual(window.translation_box.placeholderText(), TRANSLATING)
+        self.assertFalse(window.search_rendered_action.isEnabled())
+        self.assertFalse(window.search_translation_action.isEnabled())
+        self.assertTrue(window.search_original_action.isEnabled())
+        gate.set()
         self.assertTrue(wait_for(lambda: window.finished))
-        translated_picture = window.current_image()
-        window.original_button.click()
-        self.assertEqual(window.view, ORIGINAL)
-        self.assertEqual(window.text_box.toPlainText(), "Save the file before closing\nOpen the settings")
-        self.assertEqual(window.text_box.layoutDirection(), Qt.LeftToRight)
-        original_picture = window.current_image()
-        self.assertNotEqual(original_picture, translated_picture)
-        self.assertEqual(original_picture.size(), translated_picture.size())
-        self.assertTrue(window.suggested_name().startswith("Capture "))
-        self.assertNotIn("(Arabic)", window.suggested_name())
-        window.translated_button.click()
-        self.assertEqual(window.view, TRANSLATED)
-        self.assertIn("[google:ar]", window.text_box.toPlainText())
-        self.assertTrue(window.suggested_name().endswith(" (Arabic).png"))
+        self.assertTrue(window.search_rendered_action.isEnabled())
+        self.assertTrue(window.search_translation_action.isEnabled())
+        # the window, its copy and its file always hold the picture as captured
+        self.assertEqual(window.current_image().convertToFormat(QImage.Format_RGB32), picture())
+        self.assertNotEqual(window.rendered.convertToFormat(QImage.Format_RGB32), picture())
+        shown = window.picture_label.pixmap().toImage().convertToFormat(QImage.Format_RGB32)
+        self.assertEqual(shown.pixelColor(shown.width() // 2, 20), QColor("white"))
+        self.assertEqual(window.suggested_name(), time.strftime("Capture %Y-%m-%d %H-%M-%S.png", window.taken))
+        window.target_combo.setCurrentIndex(window.target_combo.findData("fr"))
+        self.assertEqual(window.translation_heading.text(), "Translation (French)")
+        self.assertTrue(wait_for(lambda: window.finished))
+        self.assertEqual(window.translation_box.layoutDirection(), Qt.LeftToRight)
+        self.assertEqual(window.suggested_name(), time.strftime("Capture %Y-%m-%d %H-%M-%S.png", window.taken))
 
     def test_each_line_of_the_picture_on_its_own_line(self):
         # two lines close together are one block (translated as one text), yet two lines in the text box
@@ -198,17 +226,18 @@ class CaptureWindowTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: window.finished), window.status.text())
         self.assertEqual(lens.made[0].calls,
                          [(["Save the file before closing it", "Open the settings", "Close"], "ar")])
-        self.assertEqual(window.text_box.toPlainText().split("\n"),
+        self.assertEqual(window.translation_box.toPlainText().split("\n"),
                          ["[google:ar] Save the", "file before closing it", "", "[google:ar] Open the settings",
                           "[google:ar] Close"])
-        window.copy_text_button.click()
-        self.assertEqual(QGuiApplication.clipboard().text(), window.text_box.toPlainText())
-        window.original_button.click()
-        self.assertEqual(window.text_box.toPlainText(),
+        window.copy_translation_button.click()
+        self.assertEqual(QGuiApplication.clipboard().text(), window.translation_box.toPlainText())
+        self.assertEqual(lens.notes[-1], "Translation copied")
+        self.assertEqual(window.original_box.toPlainText(),
                          "Save the file\nbefore closing it\n\nOpen the settings\nClose")
-        window.copy_text_button.click()
+        window.copy_original_button.click()
         self.assertEqual(QGuiApplication.clipboard().text(),
                          "Save the file\nbefore closing it\n\nOpen the settings\nClose")
+        self.assertEqual(lens.notes[-1], "Original text copied")
 
     def test_shown_text(self):
         self.assertEqual(lens_capture_window.shown_text([["a"], ["b", "c"], ["d"], ["e"]]), "a\n\nb\nc\n\nd\ne")
@@ -217,16 +246,30 @@ class CaptureWindowTest(unittest.TestCase):
     def test_copy_text_strips_direction_marks(self):
         window, lens = self.window(FakeLens(mark=RLM))
         self.assertTrue(wait_for(lambda: window.finished))
-        self.assertIn(RLM, window.text_box.toPlainText())
-        window.copy_text_button.click()
+        self.assertIn(RLM, window.translation_box.toPlainText())
+        window.copy_translation_button.click()
         copied = QGuiApplication.clipboard().text()
         self.assertNotIn(RLM, copied)
         self.assertIn("[google:ar] Save the file before closing", copied)
         # A selection copied with Ctrl+C leaves the marks out too.
-        window.text_box.selectAll()
-        window.text_box.copy()
+        window.translation_box.selectAll()
+        window.translation_box.copy()
         self.assertNotIn(RLM, QGuiApplication.clipboard().text())
         self.assertIn("[google:ar] Open the settings", QGuiApplication.clipboard().text())
+
+    def test_copy_original_strips_direction_marks(self):
+        FakeReader.lines = [line(RLM + "- مرحبا بكم", 10, 60)]
+        window, lens = self.window(FakeLens(target="en"))
+        self.assertTrue(wait_for(lambda: window.finished))
+        self.assertIn(RLM, window.original_box.toPlainText())
+        self.assertEqual(window.original_box.layoutDirection(), Qt.RightToLeft)
+        self.assertEqual(window.translation_box.layoutDirection(), Qt.LeftToRight)
+        window.copy_original_button.click()
+        self.assertNotIn(RLM, QGuiApplication.clipboard().text())
+        self.assertIn("مرحبا", QGuiApplication.clipboard().text())
+        window.original_box.selectAll()
+        window.original_box.copy()
+        self.assertNotIn(RLM, QGuiApplication.clipboard().text())
 
     def test_copy_picture(self):
         window, lens = self.window()
@@ -236,6 +279,7 @@ class CaptureWindowTest(unittest.TestCase):
         image = QGuiApplication.clipboard().image()
         self.assertFalse(image.isNull())
         self.assertEqual((image.width(), image.height()), (600, 200))
+        self.assertEqual(image.convertToFormat(QImage.Format_RGB32), picture())  # not the translated one
         self.assertIn("Picture copied", lens.notes)
 
     def test_save_writes_a_png(self):
@@ -245,10 +289,12 @@ class CaptureWindowTest(unittest.TestCase):
         with mock.patch.object(lens_capture_window.QFileDialog, "getSaveFileName",
                                return_value=(out, "PNG picture (*.png)")) as dialog:
             saved = window.save_button.click() or window.status.text()
-        self.assertIn("(Arabic).png", dialog.call_args[0][2])
+        self.assertTrue(os.path.basename(dialog.call_args[0][2]).startswith("Capture "))
+        self.assertNotIn("(Arabic)", dialog.call_args[0][2])
         self.assertTrue(os.path.isfile(out + ".png"), saved)
         image = QImage(out + ".png")
         self.assertEqual((image.width(), image.height()), (600, 200))
+        self.assertEqual(image.convertToFormat(QImage.Format_RGB32), picture())  # the capture, as it is
         self.assertEqual(lens.cfg["last_folder"], self.folder.name)
         self.assertTrue(lens.notes[-1].startswith("Picture saved"))
         self.assertIn("Picture saved", window.status.text())
@@ -275,13 +321,13 @@ class CaptureWindowTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: window.finished), window.status.text())
         gate.set()  # the old run ends now: what it sends is dropped
         settle()
-        self.assertIn("[bing:fr] Save the file before closing", window.text_box.toPlainText())
-        self.assertNotIn("[google:", window.text_box.toPlainText())
-        self.assertEqual(window.text_box.layoutDirection(), Qt.LeftToRight)
+        self.assertIn("[bing:fr] Save the file before closing", window.translation_box.toPlainText())
+        self.assertNotIn("[google:", window.translation_box.toPlainText())
+        self.assertEqual(window.translation_box.layoutDirection(), Qt.LeftToRight)
 
         window.target_combo.setCurrentIndex(window.target_combo.findData("de"))
         self.assertTrue(wait_for(lambda: window.finished))
-        self.assertIn("[bing:de] Open the settings", window.text_box.toPlainText())
+        self.assertIn("[bing:de] Open the settings", window.translation_box.toPlainText())
         self.assertEqual(len(lens.made), 2)  # the language changed, not the translator
         self.assertEqual(lens.released, [lens.made[0]])
 
@@ -307,7 +353,7 @@ class CaptureWindowTest(unittest.TestCase):
         window.target_combo.setCurrentIndex(window.target_combo.findData("fr"))
         self.assertTrue(wait_for(lambda: window.finished))
         self.assertEqual(len(FakeReader.made), 1)
-        self.assertIn("[google:fr]", window.text_box.toPlainText())
+        self.assertIn("[google:fr]", window.translation_box.toPlainText())
 
     def test_cancel_and_escape_close_and_release(self):
         for close in ("cancel", "escape"):
@@ -330,10 +376,17 @@ class CaptureWindowTest(unittest.TestCase):
         window, lens = self.window()
         self.assertTrue(wait_for(lambda: window.finished))
         self.assertEqual(window.status.text(), NO_TEXT)
-        self.assertEqual(window.view, ORIGINAL)
-        self.assertEqual(window.text_box.toPlainText(), "")
-        self.assertEqual(window.text_box.placeholderText(), NO_TEXT)
+        for box in (window.original_box, window.translation_box):
+            self.assertEqual(box.toPlainText(), "")
+            self.assertEqual(box.placeholderText(), NO_TEXT)
         self.assertEqual(lens.made[0].calls, [])  # nothing to translate
+        self.assertIsNone(window.rendered)
+        for action in (window.search_rendered_action, window.search_original_action,
+                       window.search_translation_action):
+            self.assertFalse(action.isEnabled(), action.text())
+        self.assertTrue(window.search_picture_action.isEnabled())
+        window.copy_original_button.click()
+        self.assertEqual(lens.notes[-1], "There is no text to copy")
         window.copy_picture_button.click()
         self.assertFalse(QGuiApplication.clipboard().image().isNull())
         out = os.path.join(self.folder.name, "empty.png")
@@ -345,17 +398,20 @@ class CaptureWindowTest(unittest.TestCase):
         FakeReader.lines = ARABIC
         window, lens = self.window()
         self.assertTrue(wait_for(lambda: window.finished))
-        self.assertEqual(window.view, ORIGINAL)
-        self.assertEqual(window.text_box.toPlainText(), "مرحبا بكم في البرنامج")
-        self.assertEqual(window.text_box.layoutDirection(), Qt.RightToLeft)
+        for box in (window.original_box, window.translation_box):
+            self.assertEqual(box.toPlainText(), "مرحبا بكم في البرنامج")
+            self.assertEqual(box.layoutDirection(), Qt.RightToLeft)
         self.assertIn("already in Arabic", window.status.text())
+        self.assertIsNone(window.rendered)  # nothing translated: no translated picture to search
+        self.assertFalse(window.search_rendered_action.isEnabled())
 
     def test_reading_fails_in_words(self):
         with mock.patch.object(FakeReader, "read", side_effect=RuntimeError("no OCR language")):
             window, lens = self.window()
             self.assertTrue(wait_for(lambda: window.finished))
         self.assertEqual(window.status.text(), "Could not read the text: no OCR language")
-        self.assertEqual(window.view, ORIGINAL)
+        self.assertEqual(window.original_box.placeholderText(), "Could not read the text: no OCR language")
+        self.assertEqual(window.translation_box.placeholderText(), "Could not read the text: no OCR language")
 
     def test_high_dpi_capture_keeps_its_pixels(self):
         image = picture(1200, 400)
@@ -385,7 +441,7 @@ class CaptureWindowTest(unittest.TestCase):
             self.assertEqual(made, [lens.cfg["translator"]])
             self.assertGreater(window.target_combo.count(), 50)  # every language
             self.assertTrue(wait_for(lambda: window.finished), window.status.text())
-            self.assertIn(":ar] Save the file before closing", window.text_box.toPlainText())
+            self.assertIn(":ar] Save the file before closing", window.translation_box.toPlainText())
             first = window.translator
             window.close()
             QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -414,57 +470,94 @@ class GoogleSearchTest(CaptureWindowTest.__bases__[0]):
                                    side_effect=lambda url: self.opened.append(url.toString()))
         opener.start()
         self.addCleanup(opener.stop)
+        self.sent = []
+        lens_search = mock.patch.object(lens_capture_window.google_lens, "search_picture", create=True,
+                                        side_effect=self._lens_opened)
+        lens_search.start()
+        self.addCleanup(lens_search.stop)
 
-    def test_the_text_of_the_view_or_the_selection_is_searched(self):
+    def _lens_opened(self, png):
+        self.sent.append(png)
+        return "Google Lens is opening in your browser"
+
+    @staticmethod
+    def select(box, start, end):
+        cursor = box.textCursor()
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
+        box.setTextCursor(cursor)
+
+    def test_exactly_four_searches(self):
+        self.assertEqual([a.text() for a in self.window.search_menu.actions() if not a.isSeparator()],
+                         ["Search the picture (Google Lens)", "Search the picture, translated (Google Lens)",
+                          "Search the original text", "Search the translation"])
+        self.window._update_actions()
+        self.assertTrue(all(a.isEnabled() for a in self.window.search_menu.actions()))
+
+    def test_the_original_text_or_its_selection_is_searched(self):
         w = self.window
-        w.set_view(ORIGINAL)
-        w.search_text()
+        w.search_original_action.trigger()
         self.assertTrue(self.opened[-1].startswith(lens_capture_window.GOOGLE_SEARCH))
-        self.assertIn("Save+the+file+before+closing+Open+the+settings", self.opened[-1])
-        cursor = w.text_box.textCursor()
-        cursor.setPosition(0)
-        cursor.setPosition(4, QTextCursor.KeepAnchor)
-        w.text_box.setTextCursor(cursor)
-        w._search_menu_opening()
-        self.assertEqual(w.search_text_action.text(), "Search for the selected text")
-        w.search_text()
+        self.assertTrue(self.opened[-1].endswith("q=Save+the+file+before+closing+Open+the+settings"))
+        self.select(w.original_box, 0, 4)
+        w.search_original_action.trigger()
         self.assertTrue(self.opened[-1].endswith("q=Save"))
+        self.assertIn("Searching Google for the original text, in your browser", self.lens.notes)
+        self.assertEqual(self.sent, [])  # no picture went anywhere
         self.assertEqual(lens_capture_window.text_search_url("‏- مرحبا\nبكم"),
                          lens_capture_window.GOOGLE_SEARCH + "-+%D9%85%D8%B1%D8%AD%D8%A8%D8%A7+%D8%A8%D9%83%D9%85")
 
-    def test_the_picture_goes_to_google_lens_and_its_results_open(self):
-        sent = []
+    def test_the_translation_or_its_selection_is_searched(self):
+        w = self.window
+        w.search_translation_action.trigger()
+        self.assertTrue(self.opened[-1].endswith(
+            "q=%5Bgoogle%3Aar%5D+Save+the+file+before+closing+%5Bgoogle%3Aar%5D+Open+the+settings"))
+        self.select(w.original_box, 0, 4)  # a selection in the other box does not count
+        w.search_translation_action.trigger()
+        self.assertIn("%5Bgoogle%3Aar%5D+Open+the+settings", self.opened[-1])
+        self.select(w.translation_box, 0, 11)
+        w.search_translation_action.trigger()
+        self.assertTrue(self.opened[-1].endswith("q=%5Bgoogle%3Aar%5D"))
 
-        def found(png, session=None):
-            sent.append(png)
-            return "https://www.google.com/search?vsrid=abc"
-        with mock.patch.object(lens_capture_window, "lens_search_url", found):
+    def test_the_picture_as_captured_goes_to_google_lens(self):
+        self.window.search_picture_action.trigger()
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(self.sent[0].startswith(b"\x89PNG"))
+        self.assertEqual(QImage.fromData(self.sent[0]).convertToFormat(QImage.Format_RGB32), picture())
+        self.assertEqual(self.window.status.text(), "Google Lens is opening in your browser")
+        self.assertIn("Google Lens is opening in your browser", self.lens.notes)
+        self.assertEqual(self.opened, [])  # the module opens the browser itself
+
+    def test_the_translated_picture_goes_to_google_lens(self):
+        self.window.search_rendered_action.trigger()
+        self.assertEqual(len(self.sent), 1)
+        sent = QImage.fromData(self.sent[0]).convertToFormat(QImage.Format_RGB32)
+        self.assertEqual(sent, self.window.rendered.convertToFormat(QImage.Format_RGB32))
+        self.assertNotEqual(sent, picture())
+
+    def test_no_translated_picture_while_translating(self):
+        lens = FakeLens()
+        lens.gates["google"] = gate = threading.Event()
+        window = CaptureWindow(picture(), lens)
+        self.addCleanup(gate.set)       # after the window is closed: its run is cancelled
+        self.addCleanup(window.close)
+        self.assertTrue(wait_for(lambda: window.lines is not None))
+        self.assertFalse(window.search_rendered_action.isEnabled())
+        self.assertFalse(window.search_translation_action.isEnabled())
+        window.search_translated_picture()
+        self.assertEqual(self.sent, [])
+        self.assertEqual(lens.notes[-1], "There is no translated picture yet")
+
+    def test_when_google_lens_cannot_open_the_picture_is_copied_to_paste_there(self):
+        QGuiApplication.clipboard().clear()
+        with mock.patch.object(lens_capture_window.google_lens, "search_picture", create=True,
+                               side_effect=OSError("no browser")):
             self.window.search_picture()
-            self.assertTrue(wait_for(lambda: self.opened))
-        self.assertTrue(sent[0].startswith(b"\x89PNG"))
-        self.assertEqual(self.opened, ["https://www.google.com/search?vsrid=abc"])
-        self.assertIn("Google Lens opened in your browser", self.lens.notes)
-        self.assertTrue(self.window.search_button.isEnabled())
-
-    def test_when_google_lens_does_not_answer_the_picture_is_copied_to_paste_there(self):
-        def refused(png, session=None):
-            raise RuntimeError("Google Lens answered 429")
-        with mock.patch.object(lens_capture_window, "lens_search_url", refused):
-            self.window.search_picture()
-            self.assertTrue(wait_for(lambda: self.opened))
-        self.assertEqual(self.opened, [lens_capture_window.GOOGLE_LENS])
-        self.assertFalse(QGuiApplication.clipboard().image().isNull())
-        self.assertIn("paste it in Google Lens", self.window.status.text())
-
-    def test_the_upload_asks_like_the_google_lens_page(self):
-        session = mock.Mock()
-        session.post.return_value = mock.Mock(status_code=303, headers={"Location": "https://www.google.com/x"})
-        self.assertEqual(lens_capture_window.lens_search_url(b"png", session), "https://www.google.com/x")
-        self.assertEqual(session.post.call_args.args[0], lens_capture_window.LENS_UPLOAD)
-        self.assertIn("encoded_image", session.post.call_args.kwargs["files"])
-        session.post.return_value = mock.Mock(status_code=200, headers={})
-        with self.assertRaises(RuntimeError):
-            lens_capture_window.lens_search_url(b"png", session)
+        self.assertEqual(self.window.status.text(), "Could not open Google Lens: no browser. The picture is "
+                                                    "copied: paste it in lens.google.com (Ctrl+V).")
+        copied = QGuiApplication.clipboard().image()
+        self.assertEqual(copied.convertToFormat(QImage.Format_RGB32), picture())
+        self.assertIn("Picture copied — paste it in Google Lens (Ctrl+V)", self.lens.notes)
 
 
 if __name__ == "__main__":

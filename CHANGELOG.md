@@ -3,6 +3,16 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.11.0] — 2026-10-13
+
+### Changed
+- **The capture window shows the original and the translation together**: the picture as it was captured, and under it two boxes — *Original* and *Translation (language)* — line for line, each to select and copy (*Copy original*, *Copy translation*). The *Original / Translated* switch is gone.
+- **Search Google, four ways**: the picture (Google Lens), the picture with its translation drawn on it (Google Lens), the original text, or the translation — what is selected in that box, or all of it.
+
+### Fixed
+- **Searching by the picture works.** Google ties the results of an uploaded picture to the browser that uploaded it, so the results of Lens's own upload opened empty. Now your browser sends the picture: Lens writes a small page on your PC that hands it to Google Lens at once, as dropping it on lens.google.com does.
+- A capture window could rarely crash when it closed while it was still reading.
+
 ## [1.10.0] — 2026-10-13
 
 ### Added

@@ -25,7 +25,7 @@ captions for anything your PC plays), released here as a project of its own. It 
 | ![Transparent translation window](docs/images/translation-window-transparent.png) | ![The right-click menu](docs/images/tray-menu.png) |
 | *Transparent, as much as you like: only the words stay solid* | *The right-click menu, in groups* |
 | ![Movie to subtitles](docs/images/movie-window.png) | ![Capture part of the screen](docs/images/capture-window.png) |
-| *A movie to an .srt file: from its own subtitles, its speech or the text in its picture* | *Capture part of the screen: its text, original or translated, to copy — or save the picture* |
+| *A movie to an .srt file: from its own subtitles, its speech or the text in its picture* | *Capture part of the screen: the original text and its translation side by side; copy, save, or search Google* |
 
 <p align="center"><img src="docs/images/progress-note.png" alt="A note in the corner of the screen while Lens translates"><br>
 <i>Everything Lens does shows in a small note in the corner of the screen.</i></p>
@@ -68,11 +68,11 @@ The pictures are made by `scripts\screenshots.py`.
   speaker of a dialogue on a line of their own with their dash. *Translate the subtitles…* opens them in the file
   translator, in the language and with the translator chosen.
 - **Capture part of the screen** (`Ctrl+Alt+S`, *Capture part of the screen…* in the menu, or *Capture* in the
-  window): drag a rectangle and its picture opens in a window of its own with the text in it — **the original or
-  translated**. Select and copy the text, **save the picture**, or cancel. Lens's own
-  translations and windows are left out of the picture, and the screen translation goes on as before.
-  **Search Google** from there: for the picture (Google Lens; the results open in your browser) or for its text —
-  the part you selected, or all of it.
+  window): drag a rectangle and the picture opens in a window of its own, with **two boxes under it: the original
+  text and its translation**, line for line (choose the language and the translator above). Select and copy from
+  either, copy or **save the picture**, or cancel. Lens's own translations and windows are left out of the picture,
+  and the screen translation goes on as before. **Search Google** from there, four ways: the picture (Google Lens),
+  the picture with its translation drawn on it, the original text, or the translation (what you selected, or all).
 
 **The translated text in a window of its own**
 - **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —
@@ -203,7 +203,7 @@ The picture of your screen never leaves your PC: it is read by Windows on your c
 nothing is sent anywhere. With an online translator, the text Lens read is sent to the service you chose to be
 translated — Google (Google Translate), Microsoft (Bing Translator), MyMemory (Translated srl), DeepL, Yandex
 or Naver (Papago) — and that
-service's privacy policy applies. *Search Google* in the capture window sends that picture to Google Lens (or its text to Google Search) — only when you click it. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
+service's privacy policy applies. *Search Google* in the capture window sends that picture to Google Lens (your browser sends it, from a page Lens writes on your PC) or its text to Google Search — only when you click it. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
 settings file on your PC and sent only to DeepL. Lens keeps no history of what it read.
 
 Once a day Lens asks GitHub (api.github.com) for the number of the latest version. Nothing about you is sent —
