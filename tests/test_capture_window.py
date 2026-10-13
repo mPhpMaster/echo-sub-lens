@@ -14,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("ECHOSUB_LENS_DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "_data"))
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QGuiApplication, QImage  # noqa: E402
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QTextCursor  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -395,6 +395,76 @@ class CaptureWindowTest(unittest.TestCase):
             lens.stop()
             lens.tray.hide()
             lens.overlay.close()
+
+
+class GoogleSearchTest(CaptureWindowTest.__bases__[0]):
+    """The "Search Google" button: the text (selected, or all) in Google, the picture in Google Lens."""
+
+    def setUp(self):
+        FakeReader.made, FakeReader.closed, FakeReader.lines = [], [], ENGLISH
+        patcher = mock.patch.object(lens_ocr, "Reader", FakeReader)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.lens = FakeLens()
+        self.window = CaptureWindow(picture(), self.lens)
+        self.addCleanup(self.window.close)
+        self.assertTrue(wait_for(lambda: self.window.finished))
+        self.opened = []
+        opener = mock.patch.object(lens_capture_window.QDesktopServices, "openUrl",
+                                   side_effect=lambda url: self.opened.append(url.toString()))
+        opener.start()
+        self.addCleanup(opener.stop)
+
+    def test_the_text_of_the_view_or_the_selection_is_searched(self):
+        w = self.window
+        w.set_view(ORIGINAL)
+        w.search_text()
+        self.assertTrue(self.opened[-1].startswith(lens_capture_window.GOOGLE_SEARCH))
+        self.assertIn("Save+the+file+before+closing+Open+the+settings", self.opened[-1])
+        cursor = w.text_box.textCursor()
+        cursor.setPosition(0)
+        cursor.setPosition(4, QTextCursor.KeepAnchor)
+        w.text_box.setTextCursor(cursor)
+        w._search_menu_opening()
+        self.assertEqual(w.search_text_action.text(), "Search for the selected text")
+        w.search_text()
+        self.assertTrue(self.opened[-1].endswith("q=Save"))
+        self.assertEqual(lens_capture_window.text_search_url("‏- مرحبا\nبكم"),
+                         lens_capture_window.GOOGLE_SEARCH + "-+%D9%85%D8%B1%D8%AD%D8%A8%D8%A7+%D8%A8%D9%83%D9%85")
+
+    def test_the_picture_goes_to_google_lens_and_its_results_open(self):
+        sent = []
+
+        def found(png, session=None):
+            sent.append(png)
+            return "https://www.google.com/search?vsrid=abc"
+        with mock.patch.object(lens_capture_window, "lens_search_url", found):
+            self.window.search_picture()
+            self.assertTrue(wait_for(lambda: self.opened))
+        self.assertTrue(sent[0].startswith(b"\x89PNG"))
+        self.assertEqual(self.opened, ["https://www.google.com/search?vsrid=abc"])
+        self.assertIn("Google Lens opened in your browser", self.lens.notes)
+        self.assertTrue(self.window.search_button.isEnabled())
+
+    def test_when_google_lens_does_not_answer_the_picture_is_copied_to_paste_there(self):
+        def refused(png, session=None):
+            raise RuntimeError("Google Lens answered 429")
+        with mock.patch.object(lens_capture_window, "lens_search_url", refused):
+            self.window.search_picture()
+            self.assertTrue(wait_for(lambda: self.opened))
+        self.assertEqual(self.opened, [lens_capture_window.GOOGLE_LENS])
+        self.assertFalse(QGuiApplication.clipboard().image().isNull())
+        self.assertIn("paste it in Google Lens", self.window.status.text())
+
+    def test_the_upload_asks_like_the_google_lens_page(self):
+        session = mock.Mock()
+        session.post.return_value = mock.Mock(status_code=303, headers={"Location": "https://www.google.com/x"})
+        self.assertEqual(lens_capture_window.lens_search_url(b"png", session), "https://www.google.com/x")
+        self.assertEqual(session.post.call_args.args[0], lens_capture_window.LENS_UPLOAD)
+        self.assertIn("encoded_image", session.post.call_args.kwargs["files"])
+        session.post.return_value = mock.Mock(status_code=200, headers={})
+        with self.assertRaises(RuntimeError):
+            lens_capture_window.lens_search_url(b"png", session)
 
 
 if __name__ == "__main__":

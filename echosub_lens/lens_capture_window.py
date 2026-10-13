@@ -12,9 +12,11 @@ import threading
 import time
 import unicodedata
 
-from PySide6.QtCore import QMimeData, QObject, QStandardPaths, Qt, Signal
-from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QPlainTextEdit,
+from urllib.parse import quote_plus
+
+from PySide6.QtCore import QBuffer, QIODevice, QMimeData, QObject, QStandardPaths, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMenu, QPlainTextEdit,
                                QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from . import languages, lens_files, lens_ocr, lens_style, lens_translate
@@ -99,12 +101,51 @@ def shown_text(blocks):
     return "\n".join(text for text, _ in out)
 
 
+GOOGLE_SEARCH = "https://www.google.com/search?q="
+GOOGLE_LENS = "https://lens.google.com/"
+LENS_UPLOAD = "https://lens.google.com/v3/upload"
+BROWSER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                 "Chrome/129.0.0.0 Safari/537.36")
+MAX_QUERY = 1500  # characters of text in a Google search (a longer address is refused)
+
+
+def text_search_url(text):
+    """Google's search for `text` (the direction marks left out, every line one space)."""
+    words = " ".join(plain(text).split())
+    return GOOGLE_SEARCH + quote_plus(words[:MAX_QUERY])
+
+
+def png_bytes(image):
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(buffer.data())
+
+
+def lens_search_url(png, session=None):
+    """Sends the picture to Google Lens, as its own page does, and returns the address of the results.
+    Raises when Google does not answer with one."""
+    import requests
+
+    session = session or requests.Session()
+    response = session.post(LENS_UPLOAD, params={"hl": "en", "re": "df", "st": str(int(time.time() * 1000)),
+                                                 "ep": "gsbubb"},
+                            files={"encoded_image": ("capture.png", png, "image/png")},
+                            headers={"User-Agent": BROWSER_AGENT}, allow_redirects=False, timeout=30)
+    url = response.headers.get("Location", "")
+    if response.status_code not in (301, 302, 303, 307) or not url.startswith("https://"):
+        raise RuntimeError(f"Google Lens answered {response.status_code}")
+    return url
+
+
 class _Signals(QObject):
     # Each signal starts with its run: what an older run (another language, another translator) sends is dropped.
     read = Signal(int, object)         # run, the lines read in the picture
     translated = Signal(int, object)   # run, the blocks with their translations
     progress = Signal(int, str)
     failed = Signal(int, str)
+    lens_found = Signal(str)           # the address of Google Lens's results for the picture
+    lens_failed = Signal(str)
 
 
 class TextBox(QPlainTextEdit):
@@ -154,11 +195,14 @@ class CaptureWindow(QWidget):
         self.run = 0
         self._cancel = threading.Event()
         self._released = False
+        self._lens_busy = False  # a picture on its way to Google Lens
         self.signals = _Signals()
         self.signals.read.connect(self._read_done)
         self.signals.translated.connect(self._translated)
         self.signals.progress.connect(self._progress)
         self.signals.failed.connect(self._failed)
+        self.signals.lens_found.connect(self._lens_found)
+        self.signals.lens_failed.connect(self._lens_failed)
         self._build()
         self._size_to_picture()
         self._show_view()
@@ -245,6 +289,14 @@ class CaptureWindow(QWidget):
         self.copy_picture_button = QPushButton("Copy picture")
         self.copy_picture_button.setToolTip("Copy the picture of this view, to paste it anywhere")
         self.copy_picture_button.clicked.connect(self.copy_picture)
+        self.search_button = QPushButton("Search Google ▾")
+        self.search_button.setToolTip("Search Google for this picture (Google Lens) or for its text")
+        self.search_menu = QMenu(self.search_button)
+        self.search_picture_action = self.search_menu.addAction("Search by the picture (Google Lens)",
+                                                                self.search_picture)
+        self.search_text_action = self.search_menu.addAction("Search for the text", self.search_text)
+        self.search_menu.aboutToShow.connect(self._search_menu_opening)
+        self.search_button.setMenu(self.search_menu)
         self.save_button = QPushButton("Save picture…")
         self.save_button.setObjectName("primary")
         self.save_button.setToolTip("Save the picture of this view as PNG or JPG")
@@ -252,7 +304,7 @@ class CaptureWindow(QWidget):
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setToolTip("Close this window (Esc)")
         self.cancel_button.clicked.connect(self.close)
-        for widget in (self.copy_text_button, self.copy_picture_button):
+        for widget in (self.copy_text_button, self.copy_picture_button, self.search_button):
             bottom.addWidget(widget)
         bottom.addStretch(1)
         bottom.addWidget(self.save_button)
@@ -510,6 +562,60 @@ class CaptureWindow(QWidget):
     def copy_picture(self):
         QGuiApplication.clipboard().setImage(self.current_image())
         self.lens._notify("Picture copied")
+
+    # ---- searching Google ----------------------------------------------------------
+    def _search_text(self):
+        """The text selected, or else all the text of this view."""
+        selected = self.text_box.textCursor().selectedText().replace("\u2029", "\n")
+        return plain(selected or self.current_text()).strip()
+
+    def _search_menu_opening(self):
+        text = self._search_text()
+        selected = self.text_box.textCursor().hasSelection()
+        self.search_text_action.setEnabled(bool(text))
+        self.search_text_action.setText("Search for the selected text" if selected and text else
+                                        "Search for the text" if text else "Search for the text (none read)")
+
+    def search_text(self):
+        text = self._search_text()
+        if not text:
+            self.lens._notify("There is no text to search for")
+            return
+        QDesktopServices.openUrl(QUrl(text_search_url(text)))
+        self.lens._notify("Searching Google for the text, in your browser")
+
+    def search_picture(self):
+        """The picture of this view goes to Google Lens (only now, when asked); its results open in the browser."""
+        if self._lens_busy:
+            return
+        self._lens_busy = True
+        self.search_button.setEnabled(False)
+        self.status.setText("Sending the picture to Google Lens…")
+        png = png_bytes(self.current_image())
+
+        def work():
+            try:
+                self.signals.lens_found.emit(lens_search_url(png))
+            except Exception as e:
+                log.warning("Google Lens search failed: %s", e)
+                self.signals.lens_failed.emit(str(e) or e.__class__.__name__)
+        threading.Thread(target=work, name="lens-google-lens", daemon=True).start()
+
+    def _lens_found(self, url):
+        self._lens_busy = False
+        self.search_button.setEnabled(True)
+        QDesktopServices.openUrl(QUrl(url))
+        self.status.setText("Google Lens's results are open in your browser.")
+        self.lens._notify("Google Lens opened in your browser")
+
+    def _lens_failed(self, message):
+        """No answer from Google: the picture goes on the clipboard and Google Lens opens, to paste it there."""
+        self._lens_busy = False
+        self.search_button.setEnabled(True)
+        QGuiApplication.clipboard().setImage(self.current_image())
+        QDesktopServices.openUrl(QUrl(GOOGLE_LENS))
+        self.status.setText(f"Could not send the picture ({message}). It is copied: paste it in Google Lens (Ctrl+V).")
+        self.lens._notify("Picture copied — paste it in Google Lens (Ctrl+V)")
 
     def suggested_name(self):
         stamp = time.strftime("%Y-%m-%d %H-%M-%S", self.taken)

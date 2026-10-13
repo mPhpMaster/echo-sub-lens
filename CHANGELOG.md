@@ -3,6 +3,11 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] — 2026-10-13
+
+### Added
+- **Search Google from the capture window.** *Search Google ▾* → *Search by the picture (Google Lens)* sends the picture of the view to Google Lens and opens its results in your browser; *Search for the text* searches Google for the text you selected, or all the text of the view. Nothing is sent before you click. When Google Lens does not answer, the picture is copied and Google Lens opens, to paste it there.
+
 ## [1.9.0] — 2026-10-12
 
 ### Added

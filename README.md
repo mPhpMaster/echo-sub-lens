@@ -71,6 +71,8 @@ The pictures are made by `scripts\screenshots.py`.
   window): drag a rectangle and its picture opens in a window of its own with the text in it — **the original or
   translated**. Select and copy the text, **save the picture**, or cancel. Lens's own
   translations and windows are left out of the picture, and the screen translation goes on as before.
+  **Search Google** from there: for the picture (Google Lens; the results open in your browser) or for its text —
+  the part you selected, or all of it.
 
 **The translated text in a window of its own**
 - **Translation window** (`Ctrl+Alt+W`): a window that stays above all others with the translated text in a box —
@@ -201,7 +203,7 @@ The picture of your screen never leaves your PC: it is read by Windows on your c
 nothing is sent anywhere. With an online translator, the text Lens read is sent to the service you chose to be
 translated — Google (Google Translate), Microsoft (Bing Translator), MyMemory (Translated srl), DeepL, Yandex
 or Naver (Papago) — and that
-service's privacy policy applies. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
+service's privacy policy applies. *Search Google* in the capture window sends that picture to Google Lens (or its text to Google Search) — only when you click it. Lens sends no email address or account of yours; your DeepL key is kept in Lens's
 settings file on your PC and sent only to DeepL. Lens keeps no history of what it read.
 
 Once a day Lens asks GitHub (api.github.com) for the number of the latest version. Nothing about you is sent —

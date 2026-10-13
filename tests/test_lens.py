@@ -291,7 +291,7 @@ class CaptureTest(unittest.TestCase):
         scanner = self.make(frames, [])
         scanner.tick()
         self.assertEqual(scanner.submitted, [])  # moving: wait a moment for it to settle...
-        scanner._changing_since -= lens_scanner.MAX_WAIT
+        scanner._changing_since -= lens_scanner.MAX_WAIT + 0.01  # a little more: no rounding at exactly 0.6 s
         scanner.tick()
         self.assertEqual(len(scanner.submitted), 1)  # ... but not long
         self.assertLessEqual(lens_scanner.MAX_WAIT, 1.0)
