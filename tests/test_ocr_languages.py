@@ -96,6 +96,53 @@ class QualityTest(unittest.TestCase):
         self.assertEqual(len(best_lines([[], [visual("Привет, как дела?", 200)]])), 1)  # real Russian stays
 
 
+def at(text, x, y, h=22):
+    """A line as Windows reads it, its words left to right from `x`."""
+    words, left = [], x
+    for word in text.split():
+        words.append((word, Box(left, y, 10 * len(word), h)))
+        left += 10 * len(word) + 6
+    return Line(words)
+
+
+class ListTest(unittest.TestCase):
+    """Windows reads a list's numbers as lines of their own; the list keeps its numbers and its items."""
+
+    def picture(self):
+        # As Windows read a real screenshot: the numbers apart, then the items, then a two-line paragraph
+        return [at("1.", 78, 22, 16), at("2.", 78, 56, 16), at("3.", 78, 90, 16),
+                at("Wait until app pushes 1.20.1.", 108, 21), at("Rebase my commit on top of it.", 110, 55),
+                at("Publish it as 1.21.0, so it is higher.", 110, 89),
+                at("I told both sessions this plan, and I will get a notice", 65, 148),
+                at("publish 1.21.0, or do you want to check first?", 64, 176)]
+
+    def test_each_number_goes_back_in_front_of_its_item(self):
+        lines = lens_ocr.attach_markers(self.picture())
+        self.assertEqual([line.text for line in lines][:3],
+                         ["1. Wait until app pushes 1.20.1.", "2. Rebase my commit on top of it.",
+                          "3. Publish it as 1.21.0, so it is higher."])
+
+    def test_each_item_is_a_block_and_a_paragraph_stays_one(self):
+        blocks = lens_ocr.group_blocks(self.picture())
+        self.assertEqual([b.text for b in blocks],
+                         ["1. Wait until app pushes 1.20.1.", "2. Rebase my commit on top of it.",
+                          "3. Publish it as 1.21.0, so it is higher.",
+                          "I told both sessions this plan, and I will get a notice publish 1.21.0, or do you want to "
+                          "check first?"])
+
+    def test_markers(self):
+        for marker in ("1.", "12)", "(3)", "a.", "B)", "•", "-", "▪"):
+            self.assertTrue(lens_ocr.list_marker(marker), marker)
+        for text in ("1.5", "Hi", "--", "I"):
+            self.assertFalse(lens_ocr.list_marker(text), text)
+        self.assertTrue(lens_ocr.item_line("• Open the file"))
+        self.assertFalse(lens_ocr.item_line("I told both sessions"))
+
+    def test_a_number_alone_stays(self):
+        lines = lens_ocr.attach_markers([at("1.", 10, 10, 16), at("Far away text", 600, 200)])
+        self.assertEqual(sorted(line.text for line in lines), ["1.", "Far away text"])
+
+
 class AlphabetTest(unittest.TestCase):
     def test_tags(self):
         self.assertEqual(lens_ocr.tag_script("ar-SA"), "arabic")

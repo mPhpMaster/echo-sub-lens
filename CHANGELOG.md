@@ -3,6 +3,11 @@
 All notable changes to EchoSub Lens are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.11.1] — 2026-10-13
+
+### Fixed
+- **Numbered and bulleted lists keep their shape.** Windows reads a list's numbers ("1.", "2.") and bullets as lines of their own, so they ended up apart from their items, and the items ran together into one paragraph. Now each number or bullet goes back in front of its item, and each item is a text of its own — in the capture window's boxes, in its translation, and over the screen.
+
 ## [1.11.0] — 2026-10-13
 
 ### Changed

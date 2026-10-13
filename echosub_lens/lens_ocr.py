@@ -7,6 +7,7 @@ Windows 10 and 11 recognize text offline for every language whose OCR pack is in
 """
 import asyncio
 import logging
+import re
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -275,14 +276,58 @@ def spoken_line(text):
     return text.lstrip()[:1] in DASHES and len(text.strip()) > 1
 
 
+# A list's number or bullet, alone: "1." "2)" "(3)" "a." "•" "-"
+_MARKER = re.compile(r"^(\(?\d{1,3}[.)]|\(?[A-Za-z][.)]|[•·▪◦●○■□►▸‣⁃*\-–—])$")
+# A line that starts a list item: "1. Wait…", "• Open…", "a) Save…" (a dash: spoken_line)
+_ITEM = re.compile(r"^(\(?\d{1,3}[.)]|\(?[A-Za-z][.)]|[•·▪◦●○■□►▸‣⁃*])\s")
+
+
+def list_marker(text):
+    return bool(_MARKER.match(text.strip()))
+
+
+def item_line(text):
+    """A line that starts an item of a list: it never joins the line above."""
+    return bool(_ITEM.match(text.strip())) or spoken_line(text)
+
+
+def attach_markers(lines):
+    """Windows reads a list's numbers ("1.", "2.") or bullets as lines of their own, apart from their text: each
+    goes back in front of the line beside it (to its right, or to its left in a right-to-left list)."""
+    markers = [line for line in lines if len(line.words) == 1 and list_marker(line.text)]
+    if not markers:
+        return list(lines)
+    taken = {id(line) for line in markers}
+    out = [line for line in lines if id(line) not in taken]
+    for marker in markers:
+        m = marker.box
+        best, best_gap = None, None
+        for index, line in enumerate(out):
+            b = line.box
+            tall = max(m.h, b.h)
+            if abs((b.y + b.h / 2) - (m.y + m.h / 2)) > 0.6 * tall:
+                continue  # not on the same line
+            gap = b.x - m.right if b.x >= m.right - 2 else m.x - b.right if b.right <= m.x + 2 else None
+            if gap is not None and gap <= 4 * tall and (best_gap is None or gap < best_gap):
+                best, best_gap = index, gap
+        if best is None:
+            out.append(marker)  # a number with nothing beside it stays as it is
+        else:
+            line = out[best]
+            out[best] = Line(marker.words + line.words, line.rtl_reader)
+    return sorted(out, key=lambda line: (line.box.y, line.box.x))
+
+
 def group_blocks(lines):
-    """Join lines that read as one paragraph: same size, close below each other, overlapping sideways."""
-    pieces = sorted((part for line in lines if line.words for part in split_columns(line)),
+    """Join lines that read as one paragraph: same size, close below each other, overlapping sideways. Each item
+    of a list ("1. …", "• …", "- …") is a block of its own."""
+    pieces = sorted((part for line in attach_markers([line for line in lines if line.words])
+                     for part in split_columns(line)),
                     key=lambda line: (line.box.y, line.box.x))
     blocks = []
     for line in pieces:
         box = line.box
-        if spoken_line(line.text):
+        if item_line(line.text):
             blocks.append(Block([line]))
             continue
         for block in reversed(blocks[-8:]):  # only blocks just above can continue
